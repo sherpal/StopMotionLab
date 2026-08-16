@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ScalaCompilerConfiguration">
+    <option name="separateProdTestSources" value="true" />
+    <profile name="sbt 1" modules="StopMotionLab,StopMotionLab.main,StopMotionLab.test,stopmotionlab-root,stopmotionlab-root.StopMotionLabFrontend,stopmotionlab-root.StopMotionLabFrontend~1,stopmotionlab-root.StopMotionLabServer,stopmotionlab-root.common.common,stopmotionlab-root.common.commonJS,stopmotionlab-root.main,stopmotionlab-root.test" />
+    <profile name="sbt 3" modules="stopmotionlab-root.StopMotionLabServer.main,stopmotionlab-root.StopMotionLabServer.test,stopmotionlab-root.common.common.main,stopmotionlab-root.common.common.test">
+      <option name="implicitConversions" value="true" />
+      <option name="higherKinds" value="true" />
+      <option name="deprecationWarnings" value="true" />
+      <option name="uncheckedWarnings" value="true" />
+      <option name="featureWarnings" value="true" />
+      <parameters>
+        <parameter value="-encoding" />
+        <parameter value="utf8" />
+      </parameters>
+    </profile>
+    <profile name="sbt 4" modules="stopmotionlab-root.StopMotionLabFrontend.main,stopmotionlab-root.StopMotionLabFrontend.test">
+      <parameters>
+        <parameter value="-scalajs" />
+      </parameters>
+    </profile>
+    <profile name="sbt 6" modules="stopmotionlab-root.StopMotionLabFrontend~1.main,stopmotionlab-root.StopMotionLabFrontend~1.test,stopmotionlab-root.common.commonJS.main,stopmotionlab-root.common.commonJS.test">
+      <option name="implicitConversions" value="true" />
+      <option name="higherKinds" value="true" />
+      <option name="deprecationWarnings" value="true" />
+      <option name="uncheckedWarnings" value="true" />
+      <option name="featureWarnings" value="true" />
+      <parameters>
+        <parameter value="-scalajs" />
+        <parameter value="-encoding" />
+        <parameter value="utf8" />
+      </parameters>
+    </profile>
+  </component>
+</project>

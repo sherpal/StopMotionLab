@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ScalaSbtSettings">
+    <option name="linkedExternalProjectsSettings">
+      <SbtProjectSettings>
+        <option name="converterVersion" value="2" />
+        <option name="externalProjectPath" value="$PROJECT_DIR$" />
+        <option name="modules">
+          <set>
+            <option value="C:\Users\antoi\Documents\StopMotionLab" />
+            <option value="C:\Users\antoi\Documents\StopMotionLab\.sbt\matrix\common" />
+            <option value="C:\Users\antoi\Documents\StopMotionLab\.sbt\matrix\commonJS" />
+            <option value="C:\Users\antoi\Documents\StopMotionLab\common" />
+            <option value="C:\Users\antoi\Documents\StopMotionLab\frontend" />
+            <option value="C:\Users\antoi\Documents\StopMotionLab\project" />
+            <option value="C:\Users\antoi\Documents\StopMotionLab\server" />
+          </set>
+        </option>
+        <option name="sbtVersion" value="2.0.6" />
+        <option name="separateProdAndTestSourcesIsExplicit" value="true" />
+      </SbtProjectSettings>
+    </option>
+  </component>
+</project>
