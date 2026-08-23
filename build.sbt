@@ -47,7 +47,8 @@ val commonSettings = Seq(
     "-language:higherKinds",
     "-feature",
     "-language:implicitConversions"
-  )
+  ),
+  libraryDependencies ++= Seq("org.scalameta" %% "munit" % "1.0.4" % Test)
 )
 
 val circeVersion = "0.14.9"
@@ -67,14 +68,24 @@ lazy val common = projectMatrix
   .jvmPlatform(scalaVersions = Seq(commonScalaVersion))
   .jsPlatform(scalaVersions = Seq(commonScalaVersion))
 
+val flywayVersion = "13.3.0"
+
+def databaseStuff = Seq(
+  "com.lihaoyi" %% "scalasql-simple"           % "0.3.1",
+  "org.flywaydb" % "flyway-core"               % flywayVersion,
+  "org.flywaydb" % "flyway-database-nc-sqlite" % flywayVersion,
+  "org.xerial"   % "sqlite-jdbc"               % "3.53.2.1"
+)
+
 lazy val server = project
   .in(file("./server"))
   .settings(
     commonSettings,
     name := "StopMotionLabServer",
     libraryDependencies ++= Seq(
-      "com.lihaoyi" %% "cask" % "0.11.3"
-    ),
+      "com.lihaoyi" %% "cask"   % "0.11.3",
+      "com.lihaoyi" %% "os-lib" % "0.11.8"
+    ) ++ databaseStuff,
     fork := true
   )
   .dependsOn(common.jvm(commonScalaVersion))
@@ -94,9 +105,6 @@ lazy val frontend = project
     Compile / fastLinkJS := Def.uncached {
       val targetDir = baseDirectory.value / "generated" / "fastopt"
       val outputDir = (Compile / fastLinkJS / scalaJSLinkerOutputDirectory).value
-
-      println(s"targetDir $targetDir")
-      println(s"outputDir $outputDir")
 
       IO.createDirectory(targetDir)
 

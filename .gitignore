@@ -53,3 +53,5 @@ frontend/scala-metadata.js
 frontend/generated
 frontend/public/les_trois.jpg
 frontend/node_modules/
+
+data/

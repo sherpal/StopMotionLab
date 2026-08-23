@@ -6,6 +6,7 @@ import communication.{ComputerMessage, PhoneMessage}
 
 import java.util.concurrent.atomic.AtomicReference
 
+//noinspection TypeAnnotation
 class VideoFluxRoutes(using castor.Context, cask.util.Logger) extends cask.Routes {
 
   private val connectedPhones: AtomicReference[Map[
