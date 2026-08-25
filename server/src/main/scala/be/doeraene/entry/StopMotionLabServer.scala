@@ -1,8 +1,11 @@
 package be.doeraene.entry
 
+import be.doeraene.routes.{ImagesRoutes, MoviesRoutes, VideoFluxRoutes}
+import be.doeraene.services.connectedclients.ConnectedClientsService
 import be.doeraene.services.database.DatabaseService
 import be.doeraene.services.filestorage.FileStorageService
 import be.doeraene.services.images.ImagesService
+import be.doeraene.services.movies.MoviesService
 import cask.main.{Main, Routes}
 import io.undertow.Undertow
 
@@ -13,11 +16,13 @@ import scala.util.chaining.*
 
 object StopMotionLabServer extends cask.MainRoutes {
 
-  given DatabaseService    = DatabaseService(Paths.get("./data/db"))
-  given FileStorageService = FileStorageService(Paths.get("./data/storage"))
-  given ImagesService      = ImagesService()
+  given DatabaseService         = DatabaseService(Paths.get("./data/db"))
+  given FileStorageService      = FileStorageService(Paths.get("./data/storage"))
+  given ImagesService           = ImagesService()
+  given MoviesService           = MoviesService()
+  given ConnectedClientsService = ConnectedClientsService()
 
-  def otherRoutes: Seq[cask.Routes] = Seq(VideoFluxRoutes(), ImagesRoutes())
+  def otherRoutes: Seq[cask.Routes] = Seq(VideoFluxRoutes(), ImagesRoutes(), MoviesRoutes())
 
   override def allRoutes: Seq[Routes] = super.allRoutes ++ otherRoutes
 
@@ -39,7 +44,7 @@ object StopMotionLabServer extends cask.MainRoutes {
       .build
     server.start()
     // register an on exit hook to stop the server
-    Runtime.getRuntime.addShutdownHook(new Thread(() => {
+    Runtime.getRuntime.addShutdownHook(Thread(() => {
       server.stop()
       cachedHandlerExecutor.foreach(_.shutdown())
       executionContext.shutdown()

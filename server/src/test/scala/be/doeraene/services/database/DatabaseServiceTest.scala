@@ -19,14 +19,23 @@ class DatabaseServiceTest extends munit.FunSuite {
   )
 
   db.test("Empty movies!") { service =>
-    val returned = service.movies
+    val returned = service.movies()
     assertEquals(returned, Vector.empty[Movie])
   }
 
   db.test("I can insert movies and get them") { service =>
     val created = service.createMovie()
 
-    assertEquals(created, Movie(id = created.id, name = "Untitled"))
+    assertEquals(
+      created,
+      Movie(
+        id = created.id,
+        name = "Untitled",
+        createdAt = created.createdAt,
+        lastUpdateAt = created.createdAt,
+        softDeleteAt = None
+      )
+    )
     assert(created.id.longValue > 0)
 
     (1 to 5).foreach(_ => service.createMovie())
@@ -34,7 +43,16 @@ class DatabaseServiceTest extends munit.FunSuite {
     val returned = service.getMovie(created.id)
     assertEquals(returned, Some(created))
 
-    assertEquals(service.movies.map(_.id).distinct.length, 6)
+    assertEquals(service.movies().map(_.id).distinct.length, 6)
+  }
+
+  db.test("I can update a movie's name") { service =>
+    val created = service.createMovie()
+    Thread.sleep(1200)
+    service.updateMovie(created.copy(name = "Other Name"))
+    val movieNow = service.getMovie(created.id).get
+    assertEquals(movieNow.name, "Other Name")
+    assert(movieNow.lastUpdateAt > movieNow.createdAt)
   }
 
   db.test("I can insert images and set their mime type") { service =>
@@ -70,11 +88,15 @@ class DatabaseServiceTest extends munit.FunSuite {
     for {
       (movie, index) <- movies.zipWithIndex
     } {
-      val returnedImagesInMovie = service.imagesInMovie(movie).sortBy(_.image.uuid.toString)
+      val returnedImagesInMovie = service.imagesInMovie(movie).sortBy(_.image.id.uuidValue.toString)
       val expectedImagesInMovie = multiplesOf(index + 3).map(images(_)).sortBy(_.uuid.toString)
 
       assertEquals(returnedImagesInMovie.length, expectedImagesInMovie.length, clue = s"$movie with index $index")
-      assertEquals(returnedImagesInMovie.map(_.image), expectedImagesInMovie, clue = s"$movie with index $index")
+      assertEquals(
+        returnedImagesInMovie.map(_.image),
+        expectedImagesInMovie.map(image => ImageData(ImageData.Id.fromUUID(image.uuid))),
+        clue = s"$movie with index $index"
+      )
       assertEquals(returnedImagesInMovie.flatMap(_.maybeIndex).sorted, returnedImagesInMovie.indices.toVector)
     }
   }
@@ -103,7 +125,7 @@ class DatabaseServiceTest extends munit.FunSuite {
     assertEquals(imagesInMovieAfter.map(_.image)(1), imagesInMovieNow.map(_.image)(0))
 
     val aSettingMap = imagesInMovieAfter
-      .sortBy(_.image.uuid)
+      .sortBy(_.image.id.uuidValue)
       .map(_.maybeIndex)
       .collect { case Some(index) => index }
       .zipWithIndex
@@ -114,8 +136,10 @@ class DatabaseServiceTest extends munit.FunSuite {
     val imagesInMovieEnd = service.imagesInMovie(movie)
 
     assertEquals(
-      imagesInMovieEnd.sortBy(_.image.uuid),
-      imagesInMovieAfter.sortBy(_.image.uuid).map((image, maybeIndex) => (image, Option(aSettingMap(maybeIndex.get))))
+      imagesInMovieEnd.sortBy(_.image.id.uuidValue),
+      imagesInMovieAfter
+        .sortBy(_.image.id.uuidValue)
+        .map((image, maybeIndex) => (image, Option(aSettingMap(maybeIndex.get))))
     )
   }
 

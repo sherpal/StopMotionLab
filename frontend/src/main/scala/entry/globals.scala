@@ -2,20 +2,16 @@ package entry
 
 import com.raquo.laminar.api.L.*
 import components.{Route, Router, Routes, base, baseStr}
-import computer.ComputerApp
+import movieeditor.{ComputerApp, Home}
 import org.scalajs.dom
-import org.scalajs.dom.MediaStreamConstraints
 import phone.PhoneApp
+import services.{HttpClient, ImagesService, MoviesService}
 
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.scalajs.js
-import scala.util.{Failure, Success}
 import urldsl.language.dummyErrorImpl.*
 
-val phonePath    = root / "phone"
-val computerPath = root / "computer"
-
 @main def run(): Unit = {
+  import DefinedRoutes.*
 
   def isMobile = {
     val isCoarse = dom.window.matchMedia("(pointer: coarse)").matches
@@ -29,6 +25,10 @@ val computerPath = root / "computer"
   println(baseStr)
   println(base.createPath())
 
+  given HttpClient    = HttpClient(None)
+  given ImagesService = ImagesService(None) // todo: the None will depend on where we are...
+  given MoviesService = MoviesService()
+
   render(
     dom.document.getElementById("root"),
     div(
@@ -36,15 +36,16 @@ val computerPath = root / "computer"
 
       child <-- Routes
         .firstOf(
+          Route(base / home, _ => Home()),
           Route(base / phonePath, _ => PhoneApp()),
-          Route(base / computerPath, _ => ComputerApp()),
+          Route(base / movieEditorPath, _ => ComputerApp()),
           Route(
             base,
             _ =>
               div(
                 onMountCallback { _ =>
                   Router.router.moveTo(
-                    "/" ++ (base / (if isMobile then phonePath else computerPath)).createPath()
+                    "/" ++ (base / (if isMobile then phonePath else home)).createPath()
                   )
                 }
               )

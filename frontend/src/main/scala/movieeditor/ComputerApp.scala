@@ -1,4 +1,4 @@
-package computer
+package movieeditor
 
 import be.doeraene.webcomponents.ui5.Button
 import com.raquo.laminar.api.L.*
@@ -8,7 +8,7 @@ import data.images.ImageData
 import data.movie.Movie
 import org.scalajs.dom
 import org.scalajs.dom.BlobPropertyBag
-import services.LocalStorageService
+import services.{ImagesService, LocalStorageService}
 import utils.websocket.JsonWebSocket
 import urldsl.language.dummyErrorImpl.*
 import utils.webrtc.WebRTCConnection
@@ -21,10 +21,12 @@ import scala.util.{Failure, Success}
 object ComputerApp {
 
   def apply()(using ExecutionContext): HtmlElement = {
-    val storage = LocalStorageService()
+    val storage         = LocalStorageService()
+    val imagesService   = ImagesService(None)
+    given ImagesService = imagesService
 
     val websocket = JsonWebSocket[ComputerMessage.ServerToComputerMessage, ComputerMessage.ComputerToServerMessage](
-      root / "computer"
+      root / "movieeditor"
     )
 
     val currentProviderIdVar = Var(Option.empty[java.util.UUID])
@@ -33,30 +35,27 @@ object ComputerApp {
     val askPictureBus = new EventBus[Unit]
 
     def movieDisplay = {
-//      div(
-//        MovieDisplay(
-//          picturesVar.signal.map(_.map(ImageData(_))),
-//          picturesVar.writer.contramap[Vector[ImageData]](_.map(_.dataUrl))
-//        )
-//      )
-      MovieDisplay.testElement()
+      div(
+        MovieDisplay(
+          picturesVar.signal.map(
+            _.map(_.split("/").last).map(str => ImageData.Id.fromUUID(java.util.UUID.fromString(str))).map(ImageData(_))
+          ),
+          picturesVar.writer.contramap[Vector[ImageData]](_.map(imagesService.imageUrl))
+        )
+      )
+//      MovieDisplay.testElement()
     }
 
     div(
-      "computer",
+      "movieeditor",
       onMountBind { ctx =>
         given Owner = ctx.owner
         EventStream.fromFuture(websocket.open) --> Observer.empty
       },
       onUnmountCallback(_ => websocket.close()),
 
-      websocket.openEvents
-        .mapTo(
-          ComputerMessage.AskOffer()
-        ) --> websocket.outWriter,
-
-      websocket.inEvents.collect { case ComputerMessage.PictureData(dataUrl) =>
-        dataUrl
+      websocket.inEvents.collect { case ComputerMessage.PictureData(id) =>
+        imagesService.imageUrl(ImageData(id))
       } --> picturesVar.updater[String](_ :+ _),
 
       websocket.inEvents

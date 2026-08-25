@@ -36,10 +36,12 @@ class DatabaseService(dataDirectory: Path, inTest: Boolean = false) {
     Flyway.configure().loggers(if inTest then "slf4j" else "auto").dataSource(sqliteDataSource).load()
   flyway.migrate()
 
-  def movies: Vector[Movie] = db.run(Movie.select).toVector
+  def movies(onlyNonDeleted: Boolean = true): Vector[Movie] =
+    db.run(Movie.select.filterIf(onlyNonDeleted)(_.softDeleteAt.isEmpty).sortBy(_.lastUpdateAt).desc).toVector
 
   def createMovie(): Movie = client.transaction { db =>
-    val movieToInsert: Movie = Movie(-1, "Untitled")
+    val now                  = nowSeconds()
+    val movieToInsert: Movie = Movie(-1, "Untitled", now, now, Option.empty)
     val query                = Movie.insert.values(movieToInsert).skipColumns(_.id)
     val _                    = db.run(query)
     val newId                = db.runRaw[Int]("select last_insert_rowid()").head
@@ -51,9 +53,19 @@ class DatabaseService(dataDirectory: Path, inTest: Boolean = false) {
       Movie
         .update(_.id === movie.id)
         .set(
-          _.name := movie.name
+          _.name         := movie.name,
+          _.lastUpdateAt := nowSeconds()
         )
     ) > 0
+  }
+
+  def softDeleteMovie(movieId: Movie.Id): Boolean = db.run(
+    Movie.update(_.id === movieId.value).set(_.softDeleteAt := Option(nowSeconds()))
+  ) > 0
+
+  def hardDeleteMovie(movieId: Movie.Id): Unit = client.transaction { db =>
+    db.run(MovieToImage.delete(_.movieId === movieId.value))
+    db.run(Movie.delete(_.id === movieId.value))
   }
 
   def getMovie(id: Int): Option[Movie] =
@@ -82,8 +94,8 @@ class DatabaseService(dataDirectory: Path, inTest: Boolean = false) {
   def getImage(uuid: java.util.UUID): Option[Image] =
     db.run(Image.select.filter(_.uuid === uuid).take(1)).headOption
 
-  def imageExists(image: Image): Boolean = db.run(Image.select.filter(_.uuid === image.uuid).take(1)).nonEmpty
-  
+  private def imageExists(image: Image): Boolean = db.run(Image.select.filter(_.uuid === image.uuid).take(1)).nonEmpty
+
   def attachImageToMovie(image: Image, movie: Movie): Boolean = client.transaction { db =>
     if db.run(MovieToImage.select.filter(_.movieId === movie.id).filter(_.imageUUID === image.uuid).take(1)).isEmpty
     then
@@ -163,20 +175,23 @@ class DatabaseService(dataDirectory: Path, inTest: Boolean = false) {
     affected
   }
 
-  def imagesInMovie(movie: Movie): Vector[(image: Image, maybeIndex: Option[Int])] =
+  def imagesInMovie(movie: Movie): Vector[(image: ImageData, maybeIndex: Option[Int])] =
     db.run(
       Image.select
         .join(MovieToImage.select.filter(_.movieId === movie.id))((image, link) => image.uuid === link.imageUUID)
-        .map((image, link) => (image, link.imageIndexInMovie))
+        .map((image, link) => (image.uuid, link.imageIndexInMovie))
     ).toVector
+      .map((id, maybeIndex) => ImageData(ImageData.Id.fromUUID(id)) -> maybeIndex)
 
   private[database] def deleteDatabase(): Unit = {
     db.close()
     os.remove.all(os.Path(dataDirectory.toAbsolutePath))
   }
 
+  private def nowSeconds() = System.currentTimeMillis() / 1000
+
 }
 
 object DatabaseService {
-  type Affected = Int
+  private type Affected = Int
 }

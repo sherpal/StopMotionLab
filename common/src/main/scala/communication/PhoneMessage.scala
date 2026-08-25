@@ -10,7 +10,6 @@ object PhoneMessage {
   sealed trait PhoneToServerMessage                                              extends PhoneMessage derives Codec
   case class WebRTCToServerWrapper(message: WebRTCCommProtocol.ProviderToServer) extends PhoneToServerMessage
   case object HeartBeat                                                          extends PhoneToServerMessage
-  case class PictureData(recipient: java.util.UUID, dataUrl: String)             extends PhoneToServerMessage
 
   sealed trait ServerToPhoneMessage                                             extends PhoneMessage derives Codec
   case class WebRTCToPhoneWrapper(message: WebRTCCommProtocol.ServerToProvider) extends ServerToPhoneMessage

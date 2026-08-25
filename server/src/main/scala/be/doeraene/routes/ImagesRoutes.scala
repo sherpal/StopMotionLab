@@ -1,21 +1,26 @@
-package be.doeraene.entry
+package be.doeraene.routes
 
+import be.doeraene.services.connectedclients.ConnectedClientsService
 import be.doeraene.services.images.ImagesService
 import data.images.ImageData
+import data.movie.Movie
 
 //noinspection TypeAnnotation
-class ImagesRoutes(using imageService: ImagesService)(using castor.Context, cask.util.Logger) extends cask.Routes {
+class ImagesRoutes(using imageService: ImagesService, connectedClientsService: ConnectedClientsService)(using
+    castor.Context,
+    cask.util.Logger
+) extends cask.Routes {
 
   @cask.get("api/images/:id")
-  def imageBytes(id: java.util.UUID) =
-    imageService.retrieve(ImageData.Id.fromUUID(id)) match {
+  def imageBytes(id: String) =
+    imageService.retrieve(ImageData.Id.fromUUID(java.util.UUID.fromString(id))) match {
       case Some((contentType, bytes)) =>
         cask.Response(bytes, headers = Seq("Content-Type" -> contentType.value))
-      case None => cask.Response((), statusCode = 404)
+      case None => cask.Response(Array.empty[Byte], statusCode = 404)
     }
 
   @cask.post("api/images/upload")
-  def uploadImage(movieId: Int, request: cask.Request) = {
+  def uploadImage(movieId: Int, recipient: String, request: cask.Request) = {
     val bytes         = request.bytes
     val maybeMimeType = for {
       httpContentType <- request.httpContentType.toRight(s"Missing Image content type")
@@ -32,9 +37,12 @@ class ImagesRoutes(using imageService: ImagesService)(using castor.Context, cask
       case Left(err)       => cask.Response(err, statusCode = 400)
       case Right(mimeType) =>
         val storedImage = imageService.storeAsNewImage(mimeType, bytes)
-        ???
-    }
+        connectedClientsService.imageUploaded(Movie.Id(movieId), java.util.UUID.fromString(recipient), storedImage)
 
+        cask.Response("")
+    }
   }
+
+  initialize()
 
 }

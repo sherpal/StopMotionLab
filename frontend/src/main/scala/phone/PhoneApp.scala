@@ -3,8 +3,10 @@ package phone
 import com.raquo.laminar.api.L.*
 import communication.PhoneMessage
 import communication.webrtc.WebRTCCommProtocol
+import data.movie.Movie
 import org.scalajs.dom
 import org.scalajs.dom.{ImageCapture, MediaStream, MediaStreamConstraints}
+import services.ImagesService
 import urldsl.language.dummyErrorImpl.*
 import utils.webrtc.WebRTCConnection
 import utils.websocket.JsonWebSocket
@@ -20,6 +22,8 @@ object PhoneApp {
   )(using ExecutionContext): HtmlElement = {
     val websocket =
       JsonWebSocket[PhoneMessage.ServerToPhoneMessage, PhoneMessage.PhoneToServerMessage](root / "phone")
+
+    val imagesService = ImagesService(None)
 
     val videoStreamVar = Var(Option.empty[MediaStream])
 
@@ -59,10 +63,10 @@ object PhoneApp {
               .toFuture
             track        = stream.getVideoTracks().head
             imageCapture = ImageCapture(track)
-            blob    <- imageCapture.takePhoto().toFuture
-            dataUrl <- blob.extractDataUrl
-          } yield PhoneMessage.PictureData(computerId, dataUrl))
-        } --> websocket.outWriter,
+            blob <- imageCapture.takePhoto().toFuture
+            _    <- imagesService.postImage(Movie.Id.dummy, computerId, blob) // todo: movie id
+          } yield ())
+        } --> Observer.empty,
 
       websocket.inEvents.collect { case PhoneMessage.WebRTCToPhoneWrapper(WebRTCCommProtocol.ForwardAskOffer(id)) =>
         val provider = WebRTCConnection

@@ -1,6 +1,9 @@
 create table movie (
-    id      integer not null primary key autoincrement,
-    name    text not null
+    id               integer not null primary key autoincrement,
+    name             text not null,
+    created_at       integer not null,
+    last_update_at   integer not null,
+    soft_delete_at   integer           -- time at which it was "deleted", effectively removing it from UIs, but still recoverable
 );
 
 create table image (

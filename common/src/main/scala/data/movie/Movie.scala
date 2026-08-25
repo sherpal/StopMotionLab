@@ -9,7 +9,10 @@ import urldsl.vocabulary.{FromString, Printer}
 case class Movie(
     id: Movie.Id,
     name: String,
-    images: Vector[ImageData]
+    images: Vector[Movie.ImageDataWithOrdering],
+    createdAt: Long,
+    lastUpdatedAt: Long,
+    deleted: Boolean
 )
 
 object Movie {
@@ -31,5 +34,7 @@ object Movie {
 
   given FromString[Id, DummyError] = _.toIntOption.toRight(dummyError)
   given Printer[Id]                = _.toString
+
+  case class ImageDataWithOrdering(imageData: ImageData, maybeIndex: Option[Int]) derives Codec
 
 }

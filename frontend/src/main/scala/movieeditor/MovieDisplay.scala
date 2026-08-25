@@ -1,4 +1,4 @@
-package computer
+package movieeditor
 
 import be.doeraene.webcomponents.ui5.configkeys.{ButtonDesign, IconName}
 import be.doeraene.webcomponents.ui5.{Button, Dialog, Slider, StepInput}
@@ -6,6 +6,7 @@ import com.raquo.laminar.api.L.*
 import data.images.ImageData
 import com.raquo.laminar.codecs.StringAsIsCodec
 import org.scalajs.dom
+import services.ImagesService
 
 import scala.scalajs.js
 
@@ -13,7 +14,9 @@ object MovieDisplay {
 
   /** The goal of this component is to display the work in progress movie.
     */
-  def apply(imagesSignal: Signal[Vector[ImageData]], imagesObserver: Observer[Vector[ImageData]]): HtmlElement = {
+  def apply(imagesSignal: Signal[Vector[ImageData]], imagesObserver: Observer[Vector[ImageData]])(using
+      ImagesService
+  ): HtmlElement = {
     val selectedIndices = Var(Set.empty[Int])
 
     val screenResizeBus = new EventBus[Unit]
@@ -165,7 +168,9 @@ object MovieDisplay {
     )
   }
 
-  private def displayBigImage(scrollPositionSignal: Signal[Int], imagesSignal: Signal[Vector[ImageData]]) = {
+  private def displayBigImage(scrollPositionSignal: Signal[Int], imagesSignal: Signal[Vector[ImageData]])(using
+      imagesService: ImagesService
+  ) = {
     val currentImageSignal =
       imagesSignal.combineWithFn(scrollPositionSignal)((images, index) =>
         Option.when(images.nonEmpty)(images(index.min(images.length - 1)))
@@ -176,7 +181,7 @@ object MovieDisplay {
         case Some(image) =>
           img(
             height.px := 500,
-            src       := image.dataUrl
+            src       := imagesService.imageUrl(image)
           )
         case None =>
           div("Waiting for images...")
@@ -189,12 +194,12 @@ object MovieDisplay {
       data: ImageData,
       selected: Boolean,
       selectObserver: Observer[Set[ClickModifier]]
-  ): HtmlElement = {
+  )(using imagesService: ImagesService): HtmlElement = {
     div(
       border      := "4px solid",
       borderColor := (if selected then "#2196f3" else "transparent"),
       img(
-        src                                     := data.dataUrl,
+        src                                     := imagesService.imageUrl(data),
         height.px                               := 100,
         htmlAttr("object-fit", StringAsIsCodec) := "cover"
       ),
@@ -385,10 +390,10 @@ object MovieDisplay {
   private enum MoveDirection:
     case Left, Right
 
-  def testElement(): HtmlElement = {
-    val images = Var((0 until 20).toVector.map(utils.createTestImage(_, 20)).map(ImageData(_)))
-
-    apply(images.signal, images.writer)
-  }
+//  def testElement(): HtmlElement = {
+//    val images = Var((0 until 20).toVector.map(utils.createTestImage(_, 20)).map(ImageData(_)))
+//
+//    apply(images.signal, images.writer)
+//  }
 
 }
