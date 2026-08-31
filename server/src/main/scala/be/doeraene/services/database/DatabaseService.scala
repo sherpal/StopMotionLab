@@ -18,7 +18,7 @@ class DatabaseService(dataDirectory: Path, inTest: Boolean = false) {
   )
 
   // noinspection TypeAnnotation
-  private val client = scalasql.DbClient.DataSource(
+  val client: DbClient.DataSource = scalasql.DbClient.DataSource(
     sqliteDataSource,
     config = new scalasql.Config:
 //      override def logSql(sql: String, file: String, line: Int) = {
@@ -30,7 +30,7 @@ class DatabaseService(dataDirectory: Path, inTest: Boolean = false) {
       override def columnNameMapper(v: String): String = Config.camelToSnake(v)
   )
 
-  private val db = client.getAutoCommitClientConnection
+  private lazy val db = client.getAutoCommitClientConnection
 
   private val flyway =
     Flyway.configure().loggers(if inTest then "slf4j" else "auto").dataSource(sqliteDataSource).load()

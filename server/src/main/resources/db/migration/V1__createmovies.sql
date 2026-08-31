@@ -1,3 +1,14 @@
+
+create table raw_event_envelope(
+    entity_id         integer not null,
+    sequence_number  integer not null,
+    event_payload    text not null,
+    entity_kind      text not null,
+    timestamp        integer
+);
+
+create unique index envelope_index on raw_event_envelope (entity_id, entity_kind, sequence_number);
+
 create table movie (
     id               integer not null primary key autoincrement,
     name             text not null,
