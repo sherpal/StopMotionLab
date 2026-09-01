@@ -46,6 +46,7 @@ trait EntityInformation[Command, Event, State] {
   private[eventsourcing] def encodeEnvelope(envelope: EventEnvelope[Event, State]): RawEventEnvelope = {
     import envelope.*
     RawEventEnvelope(
+      offset = 0, // ignored: the insert skips this column, the database assigns it
       entityId,
       sequenceNumber,
       eventPayload = serializeEvent(envelope.event),

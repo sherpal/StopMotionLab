@@ -7,7 +7,8 @@ import io.circe.Codec
 import scalasql.simple.{DbClient, SqliteDialect}
 
 import java.nio.file.Paths
-import scala.concurrent.Future
+import scala.concurrent.{Await, Future}
+import scala.concurrent.duration.DurationInt
 
 class EventSourcingServiceTest extends munit.FunSuite {
   import SqliteDialect.*
@@ -102,6 +103,8 @@ class EventSourcingServiceTest extends munit.FunSuite {
     entity.send(Get())
     ac.waitForInactivity()
     assertEquals(response, 102)
+
+    assertEquals(eventSourcing.lastEntityId(info.entityKind), Option(1))
 
     val db = client.getAutoCommitClientConnection
     try {
@@ -371,15 +374,18 @@ class EventSourcingServiceTest extends munit.FunSuite {
     val db = client.getAutoCommitClientConnection
     try {
       db.run(
-        RawEventEnvelope.insert.values(
-          RawEventEnvelope(
-            entityId = 1,
-            sequenceNumber = 1,
-            eventPayload = "not valid json",
-            entityKind = info.entityKind.name,
-            timestamp = 0L
+        RawEventEnvelope.insert
+          .values(
+            RawEventEnvelope(
+              offset = 0,
+              entityId = 1,
+              sequenceNumber = 1,
+              eventPayload = "not valid json",
+              entityKind = info.entityKind.name,
+              timestamp = 0L
+            )
           )
-        )
+          .skipColumns(_.offset)
       )
     } finally db.close()
 
@@ -407,15 +413,14 @@ class EventSourcingServiceTest extends munit.FunSuite {
 
     given castor.Context = ac
 
-    def makeEntity(id: Int) = eventSourcing.entity[Command, Event, Entity](
-      id,
-      entityInfo((command, state) =>
-        command match {
-          case Increment() => Effect.Persist(Event())
-          case Get()       => Effect.Ignore[Event, Entity]()
-        }
-      )
+    val info = entityInfo((command, state) =>
+      command match {
+        case Increment() => Effect.Persist(Event())
+        case Get()       => Effect.Ignore[Event, Entity]()
+      }
     )
+
+    def makeEntity(id: Int) = eventSourcing.entity[Command, Event, Entity](id, info)
 
     // With only one entity kept in memory at a time, sending to `idCount` distinct ids in a
     // tight, concurrent loop constantly evicts and recreates entities. This is a regression
@@ -429,12 +434,210 @@ class EventSourcingServiceTest extends munit.FunSuite {
     }
     ac.waitForInactivity()
 
+    val lastId = eventSourcing.lastEntityId(info.entityKind)
+    assertEquals(lastId, Option(idCount))
+
     val db = client.getAutoCommitClientConnection
     try {
       val counts = (1 to idCount).map(id => id -> db.run(RawEventEnvelope.select.filter(_.entityId === id)).size)
       val bad    = counts.filter(_._2 != incrementsPerId)
       assert(bad.isEmpty, s"expected every id to have exactly $incrementsPerId persisted events, but got: $bad")
     } finally db.close()
+  }
+
+  eventSourcing.test("a projection catches up on pre-existing events and then keeps up with new ones") {
+    (eventSourcing, _, ac) =>
+      given castor.Context = ac
+
+      import BasicEntityDefs.*
+
+      val info = entityInfo((command, state) =>
+        command match {
+          case Increment() => Effect.Persist(Event())
+          case Get()       => Effect.Ignore()
+        }
+      )
+      val entity = eventSourcing.entity[Command, Event, Entity](1, info)
+
+      // These are persisted *before* the projection is even registered.
+      for (_ <- 1 to 5) entity.send(Increment())
+      ac.waitForInactivity()
+
+      val seen       = scala.collection.mutable.ArrayBuffer.empty[Int]
+      val projection = Projection[Event]("counter-log", Projection.Semantics.AtLeastOnce) { (_, envelope) =>
+        seen.append(envelope.sequenceNumber)
+      }
+      val handle = eventSourcing.registerProjection(info, projection)
+      ac.waitForInactivity()
+
+      assertEquals(seen.toVector, (1 to 5).toVector) // caught up on everything that already existed
+
+      entity.send(Increment())
+      entity.send(Increment())
+      ac.waitForInactivity()
+      // Auto-polling is off in test mode (see ProjectionRunner's `autoPoll`), so — same as with
+      // the real poll timer in production — a new tick is what notices these new events.
+      handle.poke()
+      ac.waitForInactivity()
+
+      assertEquals(seen.toVector, (1 to 7).toVector) // and kept up with what came after
+  }
+
+  eventSourcing.test("a projection only sees events of its own entity kind") { (eventSourcing, _, ac) =>
+    given castor.Context = ac
+
+    import BasicEntityDefs.{Command, Entity, Event, Get, Increment}
+    import OtherEntityDefs.{Add, GetTotal, OtherCommand, OtherEntity, OtherEvent}
+
+    val basicInfo = BasicEntityDefs.entityInfo((command, state) =>
+      command match {
+        case Increment() => Effect.Persist(Event())
+        case Get()       => Effect.Ignore()
+      }
+    )
+    val otherInfo = OtherEntityDefs.entityInfo((command, state) =>
+      command match {
+        case Add(n)     => Effect.Persist(OtherEvent(n))
+        case GetTotal() => Effect.Ignore()
+      }
+    )
+
+    val counterEntity = eventSourcing.entity[Command, Event, Entity](1, basicInfo)
+    val otherEntity   = eventSourcing.entity[OtherCommand, OtherEvent, OtherEntity](1, otherInfo)
+
+    counterEntity.send(Increment())
+    otherEntity.send(Add(10))
+    otherEntity.send(Add(5))
+    ac.waitForInactivity()
+
+    val seen       = scala.collection.mutable.ArrayBuffer.empty[Event]
+    val projection = Projection[Event]("counter-only", Projection.Semantics.AtLeastOnce) { (_, envelope) =>
+      seen.append(envelope.event)
+    }
+    eventSourcing.registerProjection(basicInfo, projection)
+    ac.waitForInactivity()
+
+    assertEquals(seen.toVector, Vector(Event())) // never sees OtherEvent, even though both are entity id 1
+  }
+
+  eventSourcing.test("at-least-once projections retry a failed event and can run it more than once") {
+    (eventSourcing, _, ac) =>
+      given castor.Context = ac
+
+      import BasicEntityDefs.*
+
+      val info = entityInfo((command, state) =>
+        command match {
+          case Increment() => Effect.Persist(Event())
+          case Get()       => Effect.Ignore()
+        }
+      )
+      val entity = eventSourcing.entity[Command, Event, Entity](1, info)
+      for (_ <- 1 to 3) entity.send(Increment())
+      ac.waitForInactivity()
+
+      val invocations  = scala.collection.mutable.ArrayBuffer.empty[Int]
+      var failuresLeft = 1 // event #2 fails on its first attempt, then succeeds on retry
+      val projection   = Projection[Event]("flaky", Projection.Semantics.AtLeastOnce) { (_, envelope) =>
+        invocations.append(envelope.sequenceNumber)
+        if envelope.sequenceNumber == 2 && failuresLeft > 0 then {
+          failuresLeft -= 1
+          throw RuntimeException("simulated transient failure")
+        }
+      }
+      val handle = eventSourcing.registerProjection(info, projection)
+      ac.waitForInactivity()
+
+      // event 1 succeeded and was checkpointed; event 2 failed, so the batch stopped there —
+      // event 3 was never even attempted this round
+      assertEquals(invocations.toVector, Vector(1, 2))
+
+      val isUpToDate = Await.result(handle.isUpToDate, 1.second)
+      assert(!isUpToDate, "projection should not be up to date after a failed event")
+
+      handle.poke() // retry from the checkpoint: event 2 runs again (and succeeds), then event 3
+      ac.waitForInactivity()
+
+      // event 2 ran twice — exactly the "guaranteed at least once, maybe more" contract
+      assertEquals(invocations.toVector, Vector(1, 2, 2, 3))
+  }
+
+  eventSourcing.test("at-most-once projections never retry — a failed event is skipped for good") {
+    (eventSourcing, _, ac) =>
+      given castor.Context = ac
+
+      import BasicEntityDefs.*
+
+      val info = entityInfo((command, state) =>
+        command match {
+          case Increment() => Effect.Persist(Event())
+          case Get()       => Effect.Ignore()
+        }
+      )
+      val entity = eventSourcing.entity[Command, Event, Entity](1, info)
+      for (_ <- 1 to 3) entity.send(Increment())
+      ac.waitForInactivity()
+
+      val invocations = scala.collection.mutable.ArrayBuffer.empty[Int]
+      val projection  = Projection[Event]("best-effort", Projection.Semantics.AtMostOnce) { (_, envelope) =>
+        invocations.append(envelope.sequenceNumber)
+        if envelope.sequenceNumber == 2 then throw new RuntimeException("simulated permanent failure")
+      }
+      val handle = eventSourcing.registerProjection(info, projection)
+      ac.waitForInactivity()
+
+      assertEquals(invocations.toVector, Vector(1, 2, 3)) // ran once each, in order, despite #2 failing
+
+      handle.poke() // nothing left to do — #2 is never retried, the checkpoint already moved past it
+      ac.waitForInactivity()
+      assertEquals(invocations.toVector, Vector(1, 2, 3))
+  }
+
+  eventSourcing.test("a projection resumes from its persisted checkpoint instead of restarting from scratch") {
+    (eventSourcing, _, ac) =>
+      given castor.Context = ac
+
+      import BasicEntityDefs.*
+
+      val info = entityInfo((command, state) =>
+        command match {
+          case Increment() => Effect.Persist(Event())
+          case Get()       => Effect.Ignore()
+        }
+      )
+      val entity = eventSourcing.entity[Command, Event, Entity](1, info)
+      for (_ <- 1 to 3) entity.send(Increment())
+      ac.waitForInactivity()
+
+      val firstRunInvocations = scala.collection.mutable.ArrayBuffer.empty[Int]
+      eventSourcing.registerProjection(
+        info,
+        Projection[Event]("resumable", Projection.Semantics.AtLeastOnce) { (_, envelope) =>
+          firstRunInvocations.append(envelope.sequenceNumber)
+        }
+      )
+      ac.waitForInactivity()
+      assertEquals(firstRunInvocations.toVector, Vector(1, 2, 3))
+
+      for (_ <- 1 to 2) entity.send(Increment())
+      ac.waitForInactivity()
+
+      // A brand new runner under the *same* projection name, simulating a process restart: it
+      // must resume from the persisted checkpoint (offset of event 3), not replay events 1-3.
+      val secondRunInvocations = scala.collection.mutable.ArrayBuffer.empty[Int]
+      eventSourcing.cleanRegisteredProjection("resumable") // allow re-registering the same name in this test
+      val projectionHandle = eventSourcing.registerProjection(
+        info,
+        Projection[Event]("resumable", Projection.Semantics.AtLeastOnce) { (_, envelope) =>
+          secondRunInvocations.append(envelope.sequenceNumber)
+        }
+      )
+      ac.waitForInactivity()
+
+      assertEquals(secondRunInvocations.toVector, Vector(4, 5))
+
+      val isFinished = Await.result(projectionHandle.isUpToDate, 1.second)
+      assert(isFinished, "projection should be up to date after processing all events")
   }
 
 }

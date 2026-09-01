@@ -32,7 +32,7 @@ private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
           EventEnvelope[Event, EntityState](id, sequenceNumber, event, System.currentTimeMillis())
         )
       db.run(
-        RawEventEnvelope.insert.values(envelopes.map(encodeEnvelope)*)
+        RawEventEnvelope.insert.values(envelopes.map(encodeEnvelope)*).skipColumns(_.offset)
       )
       (envelopes.map(_.sequenceNumber).maxOption.getOrElse(lastSequenceNumber), nextState)
     case Effect.WithSideEffect(effect, sideEffect) =>
