@@ -12,7 +12,10 @@ class MoviesRoutes(using moviesService: MoviesService)(using
     with Helpers {
 
   @cask.get("api/movies/all")
-  def movies() = json(moviesService.movies)
+  def movies() = json(moviesService.moviesMetadata)
+
+  @cask.get("api/movies/get")
+  def movie(movieId: Int) = json(moviesService.movie(Movie.Id(movieId)))
 
   @cask.post("api/movies/update")
   def updateMovieName(movieId: Int, name: String) = json {

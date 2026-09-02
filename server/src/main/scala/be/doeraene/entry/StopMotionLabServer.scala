@@ -7,6 +7,7 @@ import be.doeraene.services.filestorage.FileStorageService
 import be.doeraene.services.images.ImagesService
 import be.doeraene.services.movies.MoviesService
 import cask.main.{Main, Routes}
+import eventsourcing.EventSourcingService
 import io.undertow.Undertow
 
 import java.nio.file.Paths
@@ -16,10 +17,11 @@ import scala.util.chaining.*
 
 object StopMotionLabServer extends cask.MainRoutes {
 
-  given DatabaseService         = DatabaseService(Paths.get("./data/db"))
-  given FileStorageService      = FileStorageService(Paths.get("./data/storage"))
-  given ImagesService           = ImagesService()
-  given MoviesService           = MoviesService()
+  given DatabaseService      = DatabaseService(Paths.get("./data/db"))
+  given EventSourcingService = EventSourcingService(EventSourcingService.Config.default, summon[DatabaseService].client)
+  given FileStorageService   = FileStorageService(Paths.get("./data/storage"))
+  given ImagesService        = ImagesService()
+  given MoviesService        = MoviesService()
   given ConnectedClientsService = ConnectedClientsService()
 
   def otherRoutes: Seq[cask.Routes] = Seq(VideoFluxRoutes(), ImagesRoutes(), MoviesRoutes())

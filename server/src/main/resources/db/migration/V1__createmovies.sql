@@ -1,3 +1,4 @@
+-- This is sqlite, times are encoded as integer with second precision
 
 create table raw_event_envelope(
     offset           integer not null primary key autoincrement, -- global, gapless-per-insert log position, used by projections

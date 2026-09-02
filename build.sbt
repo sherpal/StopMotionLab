@@ -58,7 +58,8 @@ lazy val common = projectMatrix
   .settings(
     commonSettings,
     libraryDependencies ++= Seq(
-      "be.doeraene" %% "url-dsl" % "0.7.0"
+      "be.doeraene" %% "url-dsl" % "0.7.0",
+      "com.lihaoyi" %% "castor"  % "0.3.2"
     ) ++ Seq( // circe for json serialisation
       "io.circe" %% "circe-core",
       "io.circe" %% "circe-generic",
@@ -84,8 +85,7 @@ lazy val server = project
     name := "StopMotionLabServer",
     libraryDependencies ++= Seq(
       "com.lihaoyi" %% "cask"   % "0.11.3",
-      "com.lihaoyi" %% "os-lib" % "0.11.8",
-      "com.lihaoyi" %% "castor" % "0.3.2"
+      "com.lihaoyi" %% "os-lib" % "0.11.8"
     ) ++ databaseStuff,
     fork := true
   )
