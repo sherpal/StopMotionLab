@@ -29,7 +29,7 @@ private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
       val envelopes = events.zipWithIndex
         .map((event, index) => (event, startingSequenceNumber + index))
         .map((event, sequenceNumber) =>
-          EventEnvelope[Event, EntityState](id, sequenceNumber, event, System.currentTimeMillis())
+          EventEnvelope[Event, EntityState](id, sequenceNumber, event, System.currentTimeMillis() / 1000)
         )
       db.run(
         RawEventEnvelope.insert.values(envelopes.map(encodeEnvelope)*).skipColumns(_.offset)
@@ -39,7 +39,9 @@ private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
       val resolved = handleEffect(lastSequenceNumber, currentState, effect)
       sideEffect(resolved._2)
       resolved
-    case Effect.Ignore() => (lastSequenceNumber, currentState)
+    case Effect.Ignore()                  => (lastSequenceNumber, currentState)
+    case Effect.ReplyTo(replyTo, message) =>
+      handleEffect(lastSequenceNumber, currentState, Effect.Ignore().thenReply(replyTo)(message))
   }
 
   private sealed abstract class TheState(handler: ActorCommand[Command] => State) extends State(handler)
@@ -82,7 +84,7 @@ private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
           val (nextSequenceNumber, nextState) = handleEffect(
             lastSequenceNumber,
             entity,
-            commandHandler(command, entity)
+            commandHandler(command, entity, id)
           )
           Loaded(nextSequenceNumber, nextState, passivating)
         case ActorCommand.Passivate() =>

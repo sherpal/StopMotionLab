@@ -26,7 +26,7 @@ class EventSourcingServiceTest extends munit.FunSuite {
       EntityInformation.usingCirceSerialization[Command, Event, Entity](
         Entity(0),
         (_, state) => Entity(state.count + 1),
-        commandHandler
+        (command, entity, _) => commandHandler(command, entity)
       )
   }
 
@@ -45,7 +45,7 @@ class EventSourcingServiceTest extends munit.FunSuite {
       EntityInformation.usingCirceSerialization[OtherCommand, OtherEvent, OtherEntity](
         OtherEntity(0),
         (event, state) => OtherEntity(state.total + event.delta),
-        commandHandler
+        (command, entity, _) => commandHandler(command, entity)
       )
   }
 
@@ -62,8 +62,7 @@ class EventSourcingServiceTest extends munit.FunSuite {
       },
       teardown = { (service, _, ac) =>
         ac.waitForInactivity()
-        service.closeDb()
-        os.remove.all(os.Path(Paths.get("./test-data/event-sourcing").toAbsolutePath))
+        cleanEventSourcingService(service)
       }
     )
 

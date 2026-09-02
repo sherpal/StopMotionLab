@@ -14,6 +14,9 @@ enum Effect[Event, State] {
   /** Does nothing. */
   case Ignore[E, S]() extends Effect[E, S]
 
+  /** Stateless effect that simply replies to the specified actor. */
+  case ReplyTo[E, S, Message](replyTo: castor.Actor[Message], message: S => Message) extends Effect[E, S]
+
   /** Will first apply this effect, then will run the side effect on the new state.
     * @param f
     *   side effect to run on the new entity state

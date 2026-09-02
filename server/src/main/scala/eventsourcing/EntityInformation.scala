@@ -25,7 +25,7 @@ trait EntityInformation[Command, Event, State] {
   def eventHandler(event: Event, state: State): State
 
   /** Describes how the entity must handle an upcoming command */
-  def commandHandler(command: Command, state: State): Effect[Event, State]
+  def commandHandler(command: Command, state: State, entityId: Int): Effect[Event, State]
 
   /** Describes how to store the event in the event store */
   def serializeEvent(event: Event): String
@@ -62,7 +62,7 @@ object EntityInformation {
   def usingCirceSerialization[Command, Event, State](
       initialState: State,
       eventHandler: (Event, State) => State,
-      commandHandler: (Command, State) => Effect[Event, State]
+      commandHandler: (Command, State, Int) => Effect[Event, State]
   )(using
       encoder: Encoder[Event],
       decoder: Decoder[Event],
@@ -78,8 +78,8 @@ object EntityInformation {
 
       override def eventHandler(event: Event, state: State): State = eventHandler0(event, state)
 
-      override def commandHandler(command: Command, state: State): Effect[Event, State] =
-        commandHandler0(command, state)
+      override def commandHandler(command: Command, state: State, entityId: Int): Effect[Event, State] =
+        commandHandler0(command, state, entityId)
 
       override def serializeEvent(event: Event): String = encoder(event).noSpaces
 

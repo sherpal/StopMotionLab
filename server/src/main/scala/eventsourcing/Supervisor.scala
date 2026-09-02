@@ -11,6 +11,8 @@ private[eventsourcing] class Supervisor(
     extends castor.StateMachineActor[Supervisor.SupervisorMessage] {
   import Supervisor.*
 
+  override def toString: String = "EventSourcingSupervisor"
+
   private class TheState(entities: Map[(id: Int, entityType: String), EntitySlot])
       extends State({
         case commandEnvelope @ EntityCommand(id, entityInfo, command) =>
@@ -72,6 +74,15 @@ private[eventsourcing] class Supervisor(
           idleEntities.map(_._2.actor).foreach(_.send(EventSourcedActor.ActorCommand.Passivate()))
           scheduleCheckIdleEntities()
           TheState(activeEntities.toMap ++ idleEntities.map((id, _) => (id, EntitySlot.Passivating(Vector.empty))))
+        case ClearMemory() =>
+          val newEntities = entities.map {
+            case (id, passivating: EntitySlot.Passivating) => id -> passivating
+            case (id, active: EntitySlot.Live)             =>
+              active.actor.send(EventSourcedActor.ActorCommand.Passivate())
+              id -> EntitySlot.Passivating(Vector.empty)
+          }
+
+          TheState(newEntities)
       })
 
   override def initialState: State = TheState(Map.empty)
@@ -83,7 +94,10 @@ private[eventsourcing] class Supervisor(
       java.time.Duration.of(config.entityIdleShutdownTime.toMillis / 2, ChronoUnit.MILLIS)
     )
 
-  if config.removeIdleEntities then scheduleCheckIdleEntities()
+  if config.removeIdleEntities then {
+    println(s"Launching idle entities routine.")
+    scheduleCheckIdleEntities()
+  }
 }
 
 object Supervisor {
@@ -101,6 +115,7 @@ object Supervisor {
 
   private[eventsourcing] case class EntityIsNowPassive(id: Int, entityType: String) extends SupervisorMessage
 
-  private case class CheckIdleEntities() extends SupervisorMessage
+  private case class CheckIdleEntities()          extends SupervisorMessage
+  private[eventsourcing] case class ClearMemory() extends SupervisorMessage
 
 }

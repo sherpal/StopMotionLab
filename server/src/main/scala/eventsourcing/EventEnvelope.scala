@@ -4,5 +4,5 @@ case class EventEnvelope[Event, Entity](
     entityId: Int,
     sequenceNumber: Int,
     event: Event,
-    timestamp: Long
+    timestamp: Long // in seconds
 )

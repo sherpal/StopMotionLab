@@ -21,7 +21,12 @@ class EventSourcingService(
     Supervisor(db, config = config.copy(removeIdleEntities = !isInTest && config.removeIdleEntities))
 
   def entity[Command, Event, State](id: Int, info: EntityInformation[Command, Event, State]): castor.Actor[Command] =
-    castor.ProxyActor[Command, Supervisor.SupervisorMessage](Supervisor.EntityCommand(id, info, _), supervisor)
+    case class Entity(id: Int, kind: EntityKind[Command, ?])
+        extends castor.ProxyActor[Command, Supervisor.SupervisorMessage](
+          Supervisor.EntityCommand(id, info, _),
+          supervisor
+        )
+    Entity(id, info.entityKind)
 
   /** Returns the biggest entity id for which an event has been registered.
     *
@@ -59,6 +64,10 @@ class EventSourcingService(
   private[eventsourcing] def cleanRegisteredProjection(name: String): Unit =
     registeredProjectionsRef.getAndUpdate(prev => prev - name)
     ()
+
+  /** Only use in tests! */
+  private[eventsourcing] def clearMemory(): Unit =
+    supervisor.send(Supervisor.ClearMemory())
 
   private[eventsourcing] def closeDb(): Unit = db.close()
 
