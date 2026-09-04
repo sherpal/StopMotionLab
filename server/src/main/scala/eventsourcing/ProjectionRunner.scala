@@ -1,5 +1,6 @@
 package eventsourcing
 
+import be.doeraene.utils.testshenanigans.OnlyInTest
 import castor.SimpleActor
 import scalasql.simple.{DbApi, SqliteDialect}
 
@@ -153,7 +154,7 @@ object ProjectionRunner {
     * instead of waiting for the automatic poll timer.
     */
   final class ProjectionHandle private[eventsourcing] (runner: ProjectionRunner[?, ?])(using castor.Context) {
-    private[eventsourcing] def poke(): Unit = runner.poke()
+    def poke()(using OnlyInTest): Unit = runner.poke()
 
     def isUpToDate: Future[Boolean] = {
       val promise    = scala.concurrent.Promise[Boolean]()

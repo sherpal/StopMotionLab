@@ -1,13 +1,15 @@
 package be.doeraene.services.database
 
+import be.doeraene.utils.testshenanigans.HasTestPower
 import data.images.ImageData
 import tables.{Image, Movie}
 import munit.internal.io.PlatformIO.Paths
 
+import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.*
 
-class DatabaseServiceTest extends munit.FunSuite {
+class DatabaseServiceTest extends munit.FunSuite with HasTestPower {
 
   val db = FunFixture[DatabaseService](
     setup = { test =>
@@ -19,12 +21,12 @@ class DatabaseServiceTest extends munit.FunSuite {
   )
 
   db.test("Empty movies!") { service =>
-    val returned = service.movies()
+    val returned = service.movies
     assertEquals(returned, Vector.empty[Movie])
   }
 
   db.test("I can insert movies and get them") { service =>
-    val created = service.createMovie()
+    val created = createAMovie(service)
 
     assertEquals(
       created,
@@ -32,22 +34,21 @@ class DatabaseServiceTest extends munit.FunSuite {
         id = created.id,
         name = "Untitled",
         createdAt = created.createdAt,
-        lastUpdateAt = created.createdAt,
-        softDeleteAt = None
+        lastUpdateAt = created.createdAt
       )
     )
     assert(created.id.longValue > 0)
 
-    (1 to 5).foreach(_ => service.createMovie())
+    (1 to 5).foreach(_ => createAMovie(service))
 
     val returned = service.getMovie(created.id)
     assertEquals(returned, Some(created))
 
-    assertEquals(service.movies().map(_.id).distinct.length, 6)
+    assertEquals(service.movies.map(_.id).distinct.length, 6)
   }
 
   db.test("I can update a movie's name") { service =>
-    val created = service.createMovie()
+    val created = createAMovie(service)
     Thread.sleep(1200)
     service.updateMovie(created.copy(name = "Other Name"))
     val movieNow = service.getMovie(created.id).get
@@ -66,7 +67,7 @@ class DatabaseServiceTest extends munit.FunSuite {
 
   db.test("I can insert images and attach them to movies") { service =>
     import scala.concurrent.ExecutionContext.Implicits.global
-    val movies = (1 to 10).toVector.map(_ => Future(service.createMovie())).map(Await.result(_, 2.seconds))
+    val movies = (1 to 10).toVector.map(_ => Future(createAMovie(service))).map(Await.result(_, 2.seconds))
 
     assertEquals(movies.map(_.id).distinct.length, 10)
 
@@ -102,7 +103,7 @@ class DatabaseServiceTest extends munit.FunSuite {
   }
 
   db.test("I can change the ordering of images in a movie") { service =>
-    val movie  = service.createMovie()
+    val movie  = createAMovie(service)
     val images = (1 to 20)
       .map(_ => java.util.UUID.randomUUID())
       .map(service.createImageIfNotExists(_, ImageData.MimeType.Png, Array.empty))
@@ -141,6 +142,15 @@ class DatabaseServiceTest extends munit.FunSuite {
         .sortBy(_.image.id.uuidValue)
         .map((image, maybeIndex) => (image, Option(aSettingMap(maybeIndex.get))))
     )
+  }
+
+  private val lastMovieId = AtomicInteger(0)
+
+  def createAMovie(service: DatabaseService): Movie = {
+    val now   = System.currentTimeMillis() / 1000
+    val movie = Movie(lastMovieId.incrementAndGet(), "Untitled", now, now)
+    service.createMovie(movie)
+    movie
   }
 
 }

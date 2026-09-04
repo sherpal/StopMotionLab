@@ -1,5 +1,6 @@
 package eventsourcing
 
+import be.doeraene.utils.testshenanigans.OnlyInTest
 import scalasql.simple.SqliteDialect
 
 import java.time.temporal.{ChronoUnit, TemporalUnit}
@@ -60,16 +61,14 @@ class EventSourcingService(
     ProjectionRunner.ProjectionHandle(ProjectionRunner(db, entityInfo, projection, pollInterval, autoPoll = !isInTest))
   }
 
-  /** Only use in tests! */
-  private[eventsourcing] def cleanRegisteredProjection(name: String): Unit =
+  private[eventsourcing] def cleanRegisteredProjection(name: String)(using OnlyInTest): Unit =
     registeredProjectionsRef.getAndUpdate(prev => prev - name)
     ()
 
-  /** Only use in tests! */
-  private[eventsourcing] def clearMemory(): Unit =
+  private[eventsourcing] def clearMemory()(using OnlyInTest): Unit =
     supervisor.send(Supervisor.ClearMemory())
 
-  private[eventsourcing] def closeDb(): Unit = db.close()
+  private[eventsourcing] def closeDb()(using OnlyInTest): Unit = db.close()
 
   private val registeredProjectionsRef = AtomicReference[Set[String]](Set.empty)
 

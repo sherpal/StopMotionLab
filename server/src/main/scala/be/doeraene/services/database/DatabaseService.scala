@@ -1,5 +1,6 @@
 package be.doeraene.services.database
 
+import be.doeraene.utils.testshenanigans.OnlyInTest
 import data.images.ImageData
 import tables.{*, given}
 import org.flywaydb.core.Flyway
@@ -30,23 +31,17 @@ class DatabaseService(dataDirectory: Path, inTest: Boolean = false) {
       override def columnNameMapper(v: String): String = Config.camelToSnake(v)
   )
 
-  private lazy val db = client.getAutoCommitClientConnection
+  lazy val db = client.getAutoCommitClientConnection
 
   private val flyway =
     Flyway.configure().loggers(if inTest then "slf4j" else "auto").dataSource(sqliteDataSource).load()
   flyway.migrate()
 
-  def movies(onlyNonDeleted: Boolean = true): Vector[Movie] =
-    db.run(Movie.select.filterIf(onlyNonDeleted)(_.softDeleteAt.isEmpty).sortBy(_.lastUpdateAt).desc).toVector
+  def movies: Vector[Movie] =
+    db.run(Movie.select.sortBy(_.lastUpdateAt).desc).toVector
 
-  def createMovie(): Movie = client.transaction { db =>
-    val now                  = nowSeconds()
-    val movieToInsert: Movie = Movie(-1, "Untitled", now, now, Option.empty)
-    val query                = Movie.insert.values(movieToInsert).skipColumns(_.id)
-    val _                    = db.run(query)
-    val newId                = db.runRaw[Int]("select last_insert_rowid()").head
-    movieToInsert.copy(id = newId)
-  }
+  def createMovie(movie: Movie): Unit =
+    db.run(Movie.insert.values(movie))
 
   def updateMovie(movie: Movie): Boolean = {
     db.run(
@@ -59,11 +54,7 @@ class DatabaseService(dataDirectory: Path, inTest: Boolean = false) {
     ) > 0
   }
 
-  def softDeleteMovie(movieId: Movie.Id): Boolean = db.run(
-    Movie.update(_.id === movieId.value).set(_.softDeleteAt := Option(nowSeconds()))
-  ) > 0
-
-  def hardDeleteMovie(movieId: Movie.Id): Unit = client.transaction { db =>
+  def deleteMovie(movieId: Movie.Id): Unit = client.transaction { db =>
     db.run(MovieToImage.delete(_.movieId === movieId.value))
     db.run(Movie.delete(_.id === movieId.value))
   }
@@ -183,7 +174,7 @@ class DatabaseService(dataDirectory: Path, inTest: Boolean = false) {
     ).toVector
       .map((id, maybeIndex) => ImageData(ImageData.Id.fromUUID(id)) -> maybeIndex)
 
-  private[database] def deleteDatabase(): Unit = {
+  private[database] def deleteDatabase()(using OnlyInTest): Unit = {
     db.close()
     os.remove.all(os.Path(dataDirectory.toAbsolutePath))
   }

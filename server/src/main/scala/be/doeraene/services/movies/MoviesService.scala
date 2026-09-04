@@ -3,15 +3,19 @@ package be.doeraene.services.movies
 import be.doeraene.services.database.DatabaseService
 import castor.SimpleActor
 import data.movie.{Movie, MovieMetadata}
-import eventsourcing.{Effect, EntityInformation, EventSourcingService}
+import eventsourcing.{Effect, EntityInformation, EventSourcingService, Projection, ProjectionRunner}
 import be.doeraene.utils.castorutils.ask
+import data.movie.Movie.Event
+import be.doeraene.services.database.tables.Movie as DBMovie
+import be.doeraene.utils.testshenanigans.OnlyInTest
+import scalasql.simple.SqliteDialect
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future, Promise}
 
 class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingService)(using castor.Context) {
 
-  private def now(): Long = System.currentTimeMillis()
+  private def now(): Long = System.currentTimeMillis() / 1000
 
   private val entityInfo = EntityInformation.usingCirceSerialization[Movie.Command, Movie.Event, Movie](
     Movie(Movie.Id.dummy, "Untitled", Vector.empty, createdAt = 0L, deletedAt = 0L),
@@ -38,7 +42,27 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
 
   private def movieEntity(id: Movie.Id) = eventSourcing.entity(id.value, entityInfo)
 
-  def moviesMetadata: Vector[MovieMetadata] = db.movies().map { dbMovie =>
+  private val movieProjection: Projection[Movie.Event] = Projection(
+    "movie-projection",
+    Projection.Semantics.AtLeastOnce
+  ) { (id, envelope) =>
+    import SqliteDialect.*
+    envelope.event match {
+      case event @ Event.Created(id, at) =>
+        val movie = event(entityInfo.initialState)
+        // just in case it was already there. In theory that can happen since the semantics is at least once.
+        db.getMovie(movie.id.value).foreach(_ => db.deleteMovie(movie.id))
+        db.createMovie(DBMovie(movie.id.value, movie.name, movie.createdAt, now()))
+      case Event.NameChanged(newName) =>
+        db.db.run(DBMovie.update(_.id === id).set(_.name := newName))
+      case Event.Deleted(at) =>
+        db.deleteMovie(Movie.Id(id))
+    }
+  }
+
+  val projectionHandle: ProjectionRunner.ProjectionHandle = eventSourcing.registerProjection(entityInfo, movieProjection)
+
+  def moviesMetadata: Vector[MovieMetadata] = db.movies.map { dbMovie =>
     MovieMetadata(dbMovie.typedId, dbMovie.name, dbMovie.lastUpdateAt)
   }
 
@@ -81,5 +105,8 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
   def deleteF(id: Movie.Id): Future[Boolean] = movieEntity(id).ask(Movie.Command.Delete.apply)
 
   def delete(id: Movie.Id): Boolean = Await.result(deleteF(id), Duration.Inf)
+
+  private[movies] def pokeProjection()(using OnlyInTest): Unit =
+    projectionHandle.poke()
 
 }

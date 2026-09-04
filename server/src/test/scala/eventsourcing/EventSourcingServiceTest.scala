@@ -1,6 +1,7 @@
 package eventsourcing
 
 import be.doeraene.services.database.DatabaseService
+import be.doeraene.utils.testshenanigans.HasTestPower
 import castor.Context
 import eventsourcing.EventSourcingService.Config
 import io.circe.Codec
@@ -10,7 +11,7 @@ import java.nio.file.Paths
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.DurationInt
 
-class EventSourcingServiceTest extends munit.FunSuite {
+class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
   import SqliteDialect.*
 
   object BasicEntityDefs {

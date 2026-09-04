@@ -16,7 +16,7 @@ given TypeMapper[Array[Byte]] = new TypeMapper[Array[Byte]] {
 given (using strMapper: TypeMapper[String]): TypeMapper[ImageData.MimeType] =
   strMapper.bimap(_.value, ImageData.MimeType.unsafeFromString)
 
-case class Movie(id: Int, name: String, createdAt: Long, lastUpdateAt: Long, softDeleteAt: Option[Long])
+case class Movie(id: Int, name: String, createdAt: Long, lastUpdateAt: Long)
 object Movie extends SimpleTable[Movie] {
   type Id = data.movie.Movie.Id
 
