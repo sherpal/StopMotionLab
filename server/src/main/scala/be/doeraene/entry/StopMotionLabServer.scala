@@ -1,6 +1,6 @@
 package be.doeraene.entry
 
-import be.doeraene.routes.{ImagesRoutes, MoviesRoutes, VideoFluxRoutes}
+import be.doeraene.routes.{CommandRoutes, ImagesRoutes, MoviesRoutes, VideoFluxRoutes}
 import be.doeraene.services.connectedclients.ConnectedClientsService
 import be.doeraene.services.database.DatabaseService
 import be.doeraene.services.filestorage.FileStorageService
@@ -24,7 +24,8 @@ object StopMotionLabServer extends cask.MainRoutes {
   given MoviesService        = MoviesService()
   given ConnectedClientsService = ConnectedClientsService()
 
-  def otherRoutes: Seq[cask.Routes] = Seq(VideoFluxRoutes(), ImagesRoutes(), MoviesRoutes())
+  def otherRoutes: Seq[cask.Routes] =
+    Seq(VideoFluxRoutes(), ImagesRoutes(), MoviesRoutes(), CommandRoutes(Seq(summon[MoviesService].commandRouter)))
 
   override def allRoutes: Seq[Routes] = super.allRoutes ++ otherRoutes
 

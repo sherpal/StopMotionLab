@@ -4,7 +4,7 @@ import com.raquo.laminar.api.L.*
 import be.doeraene.webcomponents.ui5.*
 import be.doeraene.webcomponents.ui5.configkeys.IconName
 import components.MovieList
-import data.movie.Movie
+import data.movie.{Movie, MovieMetadata}
 import services.{ImagesService, MoviesService}
 
 import scala.concurrent.ExecutionContext
@@ -13,7 +13,7 @@ object Home {
 
   def apply()(using imagesService: ImagesService, moviesService: MoviesService)(using ExecutionContext): HtmlElement = {
 
-    val moviesVar = Var(Vector.empty[Movie])
+    val moviesVar = Var(Vector.empty[MovieMetadata])
 
     val createMovieBus = new EventBus[Unit]
     val deleteMovieBus = new EventBus[Movie.Id]

@@ -3,11 +3,11 @@ package components
 import com.raquo.laminar.api.L.*
 import be.doeraene.webcomponents.ui5.*
 import be.doeraene.webcomponents.ui5.configkeys.IconName
-import data.movie.Movie
+import data.movie.{Movie, MovieMetadata}
 
 object MovieList {
 
-  def apply(movies: Signal[Vector[Movie]], deleteMovieObserver: Observer[Movie.Id]): HtmlElement = {
+  def apply(movies: Signal[Vector[MovieMetadata]], deleteMovieObserver: Observer[Movie.Id]): HtmlElement = {
     UList(
       children <-- movies
         .split(_.id)((key, initialMovie, updates) => {

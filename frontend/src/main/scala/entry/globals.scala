@@ -6,6 +6,7 @@ import movieeditor.{ComputerApp, Home}
 import org.scalajs.dom
 import phone.PhoneApp
 import services.{HttpClient, ImagesService, MoviesService}
+import utils.websocket.CommandBridgeClient
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import urldsl.language.dummyErrorImpl.*
@@ -25,9 +26,12 @@ import urldsl.language.dummyErrorImpl.*
   println(baseStr)
   println(base.createPath())
 
-  given HttpClient    = HttpClient(None)
-  given ImagesService = ImagesService(None) // todo: the None will depend on where we are...
-  given MoviesService = MoviesService()
+  given HttpClient          = HttpClient(None)
+  given ImagesService       = ImagesService(None) // todo: the None will depend on where we are...
+  given CommandBridgeClient = CommandBridgeClient()
+  given MoviesService       = MoviesService()
+
+  summon[CommandBridgeClient].open()
 
   render(
     dom.document.getElementById("root"),

@@ -1,5 +1,6 @@
 package data.movie
 
+import castorwire.Bridge
 import data.images.ImageData
 import io.circe.{Codec, Decoder, Encoder}
 import urldsl.errors.DummyError
@@ -46,6 +47,19 @@ object Movie {
     case Get(replyTo: castor.Actor[Option[Movie]])
     case Delete(replyTo: castor.Actor[Boolean])
     case RawGet(replyTo: castor.Actor[Movie])
+
+  object Command {
+
+    /** Not `derives Codec`: the `replyTo: castor.Actor[R]` fields need a live [[Bridge]]
+      * (one per connection) to become wire-safe, and that bridge only exists once a
+      * client has actually connected -- long after this companion object is compiled.
+      * So the codec is a plain method, explicitly parameterized by whichever connection's
+      * bridge is relevant right now, instead of a `given` resolved once for everyone.
+      * See `castorwire.Bridge.bridgedCodec` for how the `castor.Actor[R]` fields
+      * themselves are handled, with no change to this ADT beyond this method.
+      */
+    def codec(using Bridge): Codec[Command] = Bridge.bridgedCodec[Command]
+  }
 
   enum Event derives Codec:
     case Created(id: Id, at: Long)

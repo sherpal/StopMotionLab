@@ -2,12 +2,14 @@ package be.doeraene.services.movies
 
 import be.doeraene.services.database.DatabaseService
 import castor.SimpleActor
+import castorwire.{Bridge, CommandRouter}
 import data.movie.{Movie, MovieMetadata}
 import eventsourcing.{Effect, EntityInformation, EventSourcingService, Projection, ProjectionRunner}
 import be.doeraene.utils.castorutils.ask
 import data.movie.Movie.Event
 import be.doeraene.services.database.tables.Movie as DBMovie
 import be.doeraene.utils.testshenanigans.OnlyInTest
+import io.circe.Json
 import scalasql.simple.SqliteDialect
 
 import scala.concurrent.duration.Duration
@@ -42,6 +44,21 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
 
   private def movieEntity(id: Movie.Id) = eventSourcing.entity(id.value, entityInfo)
 
+  /** Exposes a subset of [[Movie.Command]] to castorwire-bridged connections (see `be.doeraene.routes.CommandRoutes`).
+    * `Create` and `RawGet` are deliberately left out: `Create` needs the id-assignment retry loop in `createF`, and
+    * `RawGet` is an internal escape hatch that ignores whether the movie is active/deleted -- neither should be
+    * reachable directly by a client-chosen entity id.
+    */
+  val commandRouter: CommandRouter = new CommandRouter {
+    def entityKind: String = entityInfo.entityKind.name
+
+    def dispatch(entityId: Int, json: Json, bridge: Bridge): Unit =
+      json.as[Movie.Command](using Movie.Command.codec(using bridge)) match {
+        case Right(command) => movieEntity(Movie.Id(entityId)).send(command)
+        case Left(err)      => System.err.println(s"Failed to decode Movie.Command: $err")
+      }
+  }
+
   private val movieProjection: Projection[Movie.Event] = Projection(
     "movie-projection",
     Projection.Semantics.AtLeastOnce
@@ -60,7 +77,8 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
     }
   }
 
-  val projectionHandle: ProjectionRunner.ProjectionHandle = eventSourcing.registerProjection(entityInfo, movieProjection)
+  val projectionHandle: ProjectionRunner.ProjectionHandle =
+    eventSourcing.registerProjection(entityInfo, movieProjection)
 
   def moviesMetadata: Vector[MovieMetadata] = db.movies.map { dbMovie =>
     MovieMetadata(dbMovie.typedId, dbMovie.name, dbMovie.lastUpdateAt)
