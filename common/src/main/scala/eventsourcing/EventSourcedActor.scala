@@ -2,6 +2,7 @@ package eventsourcing
 
 import eventsourcing.EventSourcedActor.ActorCommand
 
+import scala.annotation.tailrec
 import scala.concurrent.Future
 import scala.util.{Failure, Success}
 
@@ -16,9 +17,8 @@ private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
 
   import entityInfo.*
 
-  /** Applies one effect, persisting events (if any) through the [[EventStore]]. Only the
-    * `PersistMultiple` branch does real asynchronous work; everything else resolves immediately, via an
-    * already-completed future.
+  /** Applies one effect, persisting events (if any) through the [[EventStore]]. Only the `PersistMultiple` branch does
+    * real asynchronous work; everything else resolves immediately, via an already-completed future.
     */
   private def handleEffect(
       lastSequenceNumber: Int,
@@ -49,6 +49,44 @@ private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
       handleEffect(lastSequenceNumber, currentState, Effect.Ignore().thenReply(replyTo)(message))
   }
 
+  /** Applies a backlog of buffered commands one at a time, exactly as if each had just arrived while `Loaded` — instead
+    * of dumping them all back into the mailbox at once and transitioning straight to `Loaded`. That naive approach has
+    * a real hazard: castor processes a mailbox in fixed-size batches (see `castor.BaseActor.runWithItems`, which
+    * snapshots the queue once and runs every message in that snapshot before ever looking at the queue again), so a
+    * command that happens to land in the *same* batch as the message that triggers the flush (the last, empty recovery
+    * page; or a persisted effect completing) would get applied immediately against `Loaded` — jumping ahead of the
+    * backlog, even though it logically arrived later.
+    *
+    * Draining one command at a time and never returning `Loaded` until `remaining` is truly empty avoids that: anything
+    * batched alongside us just lands on a state that still buffers (`Processing`, via the `Wrapper`/`Passivate` cases
+    * below), so it joins the back of the queue instead of racing ahead.
+    */
+  @tailrec
+  private def drain(
+      lastSequenceNumber: Int,
+      entity: EntityState,
+      passivating: Boolean,
+      remaining: List[ActorCommand[Command]]
+  ): State = remaining match {
+    case Nil                                    => Loaded(lastSequenceNumber, entity, passivating)
+    case ActorCommand.Wrapper(command) :: other =>
+      handleEffect(lastSequenceNumber, entity, commandHandler(command, entity, id)).onComplete {
+        case Success(resolved) => send(ActorCommand.CommandHandled(resolved))
+        case Failure(error)    => send(ActorCommand.PersistFailed(error))
+      }
+      Processing(lastSequenceNumber, entity, passivating, other)
+    case ActorCommand.Passivate() :: others =>
+      if !passivating then
+        // first time we see it: same "defer to the very end" trick as Loaded.Passivate, but done by
+        // moving it within our own backlog instead of round-tripping through the real mailbox.
+        drain(lastSequenceNumber, entity, passivating = true, others :+ ActorCommand.Passivate())
+      else {
+        supervisor.send(Supervisor.EntityIsNowPassive(id, entityKind.name))
+        Passive()
+      }
+    case _ :: others => drain(lastSequenceNumber, entity, passivating, others) // stray: never buffered
+  }
+
   private sealed abstract class TheState(handler: ActorCommand[Command] => State) extends State(handler)
 
   private case class LoadingState(
@@ -72,8 +110,7 @@ private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
         case ActorCommand.RecoveryPageLoaded(rawEnvelopes) =>
           val nextEnvelopes = rawEnvelopes.map(decodeEnvelope)
           if nextEnvelopes.isEmpty then {
-            eventsInQueue.foreach(send)
-            Loaded(currentSequenceNumber, currentState, passivating = false)
+            drain(currentSequenceNumber, currentState, passivating = false, eventsInQueue.toList)
           } else {
             val newState =
               nextEnvelopes.foldLeft(currentState)((state, envelope) => eventHandler(envelope.event, state))
@@ -91,13 +128,13 @@ private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
 
   private case class Loaded(lastSequenceNumber: Int, entity: EntityState, passivating: Boolean)
       extends TheState({
-        case ActorCommand.LoadNext() => state
+        case ActorCommand.LoadNext()       => state
         case ActorCommand.Wrapper(command) =>
           handleEffect(lastSequenceNumber, entity, commandHandler(command, entity, id)).onComplete {
             case Success(resolved) => send(ActorCommand.CommandHandled(resolved))
             case Failure(error)    => send(ActorCommand.PersistFailed(error))
           }
-          Processing(lastSequenceNumber, entity, passivating, queued = Vector.empty)
+          Processing(lastSequenceNumber, entity, passivating, queued = List.empty)
         case ActorCommand.Passivate() =>
           if !passivating then {
             // need to put back passivate at end of queue. In this state we know this has to be last message now
@@ -110,24 +147,23 @@ private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
           state // unreachable here
       })
 
-  /** Buffers incoming commands (and passivation requests) while a command's effect is being applied
-    * asynchronously — mirrors [[LoadingState]]'s buffering of commands arriving mid-recovery.
+  /** Buffers incoming commands (and passivation requests) while a command's effect is being applied asynchronously —
+    * mirrors [[LoadingState]]'s buffering of commands arriving mid-recovery.
     */
   private case class Processing(
       lastSequenceNumber: Int,
       entity: EntityState,
       passivating: Boolean,
-      queued: Vector[ActorCommand[Command]]
+      queued: List[ActorCommand[Command]]
   ) extends TheState({
-        case ActorCommand.LoadNext() => state
+        case ActorCommand.LoadNext()       => state
         case ActorCommand.Wrapper(command) =>
           Processing(lastSequenceNumber, entity, passivating, queued :+ ActorCommand.Wrapper(command))
         case ActorCommand.Passivate() =>
           Processing(lastSequenceNumber, entity, passivating, queued :+ ActorCommand.Passivate())
         case ActorCommand.CommandHandled(result) =>
           val (nextSequenceNumber, nextState) = result.asInstanceOf[(Int, EntityState)]
-          queued.foreach(send)
-          Loaded(nextSequenceNumber, nextState, passivating)
+          drain(nextSequenceNumber, nextState, passivating, queued)
         case ActorCommand.PersistFailed(error) =>
           // TODO: route through a real logger instead, once one exists in this codebase. Same
           // known-fragility as a corrupted event payload: this leaves the entity permanently stuck,
@@ -157,17 +193,16 @@ private[eventsourcing] object EventSourcedActor {
     // -- internal continuations, only ever sent by an EventSourcedActor to itself --
 
     /** One page of recovery events came back from the store (possibly empty, meaning recovery is done). */
-    case RecoveryPageLoaded[C](envelopes: Vector[RawEventEnvelope]) extends ActorCommand[C]
+    private[EventSourcedActor] case RecoveryPageLoaded[C](envelopes: Vector[RawEventEnvelope]) extends ActorCommand[C]
 
-    /** A command's effect finished being applied. `result` is really `(Int, EntityState)` for the
-      * enclosing [[EventSourcedActor]] instance — `EntityState` can't be a type parameter here, since
-      * [[Supervisor]] holds actors of this type uniformly across many different concrete `EntityState`s.
-      * This case is only ever constructed and consumed by the very instance that sent it, so the cast
-      * back in [[EventSourcedActor.Processing]] is safe.
+    /** A command's effect finished being applied. `result` is really `(Int, EntityState)` for the enclosing
+      * [[EventSourcedActor]] instance — `EntityState` can't be a type parameter here, since [[Supervisor]] holds actors
+      * of this type uniformly across many different concrete `EntityState`s. This case is only ever constructed and
+      * consumed by the very instance that sent it, so the cast back in [[EventSourcedActor.Processing]] is safe.
       */
-    case CommandHandled[C](result: (Int, Any)) extends ActorCommand[C]
+    private[EventSourcedActor] case CommandHandled[C](result: (Int, Any)) extends ActorCommand[C]
 
     /** A command's effect failed to persist. */
-    case PersistFailed[C](error: Throwable) extends ActorCommand[C]
+    private[EventSourcedActor] case PersistFailed[C](error: Throwable) extends ActorCommand[C]
 
 }

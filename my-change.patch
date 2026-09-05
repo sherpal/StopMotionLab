@@ -1,0 +1,1336 @@
+From 25139ffb798b3a6c10702bfa7ca6ebff37027bec Mon Sep 17 00:00:00 2001
+From: Antoine Doeraene <antoine.doeraene@communardo.com>
+Date: Sat, 5 Sep 2026 09:51:56 +0200
+Subject: [PATCH] Moved EventSourcing service to common, based on abstract
+ eventstore and schedulers
+
+---
+ .../utils/testshenanigans/OnlyInTest.scala    |   0
+ .../src/main/scala/eventsourcing/Effect.scala |   0
+ .../eventsourcing/EntityInformation.scala     |   0
+ .../main/scala/eventsourcing/EntityKind.scala |   0
+ .../scala/eventsourcing/EventEnvelope.scala   |   0
+ .../eventsourcing/EventSourcedActor.scala     | 173 +++++++++++++++++
+ .../eventsourcing/EventSourcingService.scala  |  27 +--
+ .../main/scala/eventsourcing/EventStore.scala |  49 +++++
+ .../main/scala/eventsourcing/Projection.scala |   0
+ .../eventsourcing/ProjectionRunner.scala      | 179 ++++++++++++++++++
+ .../eventsourcing/RawEventEnvelope.scala      |  14 ++
+ .../main/scala/eventsourcing/Scheduler.scala  |  12 ++
+ .../main/scala/eventsourcing/Supervisor.scala |  17 +-
+ .../doeraene/entry/StopMotionLabServer.scala  |   7 +-
+ .../services/database/tables/globals.scala    |  13 ++
+ .../services/movies/MoviesService.scala       |  10 +-
+ .../scala/eventsourcing/CastorScheduler.scala |  19 ++
+ .../eventsourcing/EventSourcedActor.scala     | 115 -----------
+ .../eventsourcing/ProjectionCheckpoint.scala  |  16 --
+ .../eventsourcing/ProjectionRunner.scala      | 169 -----------------
+ .../eventsourcing/RawEventEnvelope.scala      |  14 --
+ .../scala/eventsourcing/SqlEventStore.scala   | 135 +++++++++++++
+ .../services/movies/MoviesServiceTest.scala   |   7 +-
+ .../EventSourcingServiceTest.scala            |  23 +--
+ 24 files changed, 642 insertions(+), 357 deletions(-)
+ rename {server => common}/src/main/scala/be/doeraene/utils/testshenanigans/OnlyInTest.scala (100%)
+ rename {server => common}/src/main/scala/eventsourcing/Effect.scala (100%)
+ rename {server => common}/src/main/scala/eventsourcing/EntityInformation.scala (100%)
+ rename {server => common}/src/main/scala/eventsourcing/EntityKind.scala (100%)
+ rename {server => common}/src/main/scala/eventsourcing/EventEnvelope.scala (100%)
+ create mode 100644 common/src/main/scala/eventsourcing/EventSourcedActor.scala
+ rename {server => common}/src/main/scala/eventsourcing/EventSourcingService.scala (81%)
+ create mode 100644 common/src/main/scala/eventsourcing/EventStore.scala
+ rename {server => common}/src/main/scala/eventsourcing/Projection.scala (100%)
+ create mode 100644 common/src/main/scala/eventsourcing/ProjectionRunner.scala
+ create mode 100644 common/src/main/scala/eventsourcing/RawEventEnvelope.scala
+ create mode 100644 common/src/main/scala/eventsourcing/Scheduler.scala
+ rename {server => common}/src/main/scala/eventsourcing/Supervisor.scala (93%)
+ create mode 100644 server/src/main/scala/eventsourcing/CastorScheduler.scala
+ delete mode 100644 server/src/main/scala/eventsourcing/EventSourcedActor.scala
+ delete mode 100644 server/src/main/scala/eventsourcing/ProjectionCheckpoint.scala
+ delete mode 100644 server/src/main/scala/eventsourcing/ProjectionRunner.scala
+ delete mode 100644 server/src/main/scala/eventsourcing/RawEventEnvelope.scala
+ create mode 100644 server/src/main/scala/eventsourcing/SqlEventStore.scala
+
+diff --git a/server/src/main/scala/be/doeraene/utils/testshenanigans/OnlyInTest.scala b/common/src/main/scala/be/doeraene/utils/testshenanigans/OnlyInTest.scala
+similarity index 100%
+rename from server/src/main/scala/be/doeraene/utils/testshenanigans/OnlyInTest.scala
+rename to common/src/main/scala/be/doeraene/utils/testshenanigans/OnlyInTest.scala
+diff --git a/server/src/main/scala/eventsourcing/Effect.scala b/common/src/main/scala/eventsourcing/Effect.scala
+similarity index 100%
+rename from server/src/main/scala/eventsourcing/Effect.scala
+rename to common/src/main/scala/eventsourcing/Effect.scala
+diff --git a/server/src/main/scala/eventsourcing/EntityInformation.scala b/common/src/main/scala/eventsourcing/EntityInformation.scala
+similarity index 100%
+rename from server/src/main/scala/eventsourcing/EntityInformation.scala
+rename to common/src/main/scala/eventsourcing/EntityInformation.scala
+diff --git a/server/src/main/scala/eventsourcing/EntityKind.scala b/common/src/main/scala/eventsourcing/EntityKind.scala
+similarity index 100%
+rename from server/src/main/scala/eventsourcing/EntityKind.scala
+rename to common/src/main/scala/eventsourcing/EntityKind.scala
+diff --git a/server/src/main/scala/eventsourcing/EventEnvelope.scala b/common/src/main/scala/eventsourcing/EventEnvelope.scala
+similarity index 100%
+rename from server/src/main/scala/eventsourcing/EventEnvelope.scala
+rename to common/src/main/scala/eventsourcing/EventEnvelope.scala
+diff --git a/common/src/main/scala/eventsourcing/EventSourcedActor.scala b/common/src/main/scala/eventsourcing/EventSourcedActor.scala
+new file mode 100644
+index 0000000..ec029bf
+--- /dev/null
++++ b/common/src/main/scala/eventsourcing/EventSourcedActor.scala
+@@ -0,0 +1,173 @@
++package eventsourcing
++
++import eventsourcing.EventSourcedActor.ActorCommand
++
++import scala.concurrent.Future
++import scala.util.{Failure, Success}
++
++private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
++    id: Int,
++    entityInfo: EntityInformation[Command, Event, EntityState],
++    eventStore: EventStore,
++    config: EventSourcingService.Config,
++    supervisor: castor.Actor[Supervisor.EntityIsNowPassive]
++)(using castor.Context)
++    extends castor.StateMachineActor[ActorCommand[Command]] {
++
++  import entityInfo.*
++
++  /** Applies one effect, persisting events (if any) through the [[EventStore]]. Only the
++    * `PersistMultiple` branch does real asynchronous work; everything else resolves immediately, via an
++    * already-completed future.
++    */
++  private def handleEffect(
++      lastSequenceNumber: Int,
++      currentState: EntityState,
++      effect: Effect[Event, EntityState]
++  ): Future[(Int, EntityState)] = effect match {
++    case Effect.Persist(event) =>
++      handleEffect(lastSequenceNumber, currentState, Effect.PersistMultiple(Vector(event)))
++    case Effect.PersistMultiple(events) =>
++      val startingSequenceNumber = lastSequenceNumber + 1
++
++      val nextState = events.foldLeft(currentState)((s, e) => eventHandler(e, s))
++      val envelopes = events.zipWithIndex
++        .map((event, index) => (event, startingSequenceNumber + index))
++        .map((event, sequenceNumber) =>
++          EventEnvelope[Event, EntityState](id, sequenceNumber, event, System.currentTimeMillis() / 1000)
++        )
++      eventStore.appendEnvelopes(envelopes.map(encodeEnvelope)).map { _ =>
++        (envelopes.map(_.sequenceNumber).maxOption.getOrElse(lastSequenceNumber), nextState)
++      }
++    case Effect.WithSideEffect(effect, sideEffect) =>
++      handleEffect(lastSequenceNumber, currentState, effect).map { resolved =>
++        sideEffect(resolved._2)
++        resolved
++      }
++    case Effect.Ignore()                  => Future.successful((lastSequenceNumber, currentState))
++    case Effect.ReplyTo(replyTo, message) =>
++      handleEffect(lastSequenceNumber, currentState, Effect.Ignore().thenReply(replyTo)(message))
++  }
++
++  private sealed abstract class TheState(handler: ActorCommand[Command] => State) extends State(handler)
++
++  private case class LoadingState(
++      currentSequenceNumber: Int,
++      currentState: EntityState,
++      eventsInQueue: Vector[ActorCommand[Command]]
++  ) extends TheState({
++        case ActorCommand.LoadNext() =>
++          eventStore
++            .loadEnvelopes(entityKind.name, id, currentSequenceNumber, config.eventPageSize)
++            .onComplete {
++              case Success(envelopes) => send(ActorCommand.RecoveryPageLoaded(envelopes))
++              case Failure(error)     =>
++                // TODO: route through a real logger instead, once one exists in this codebase. Same
++                // known-fragility as a corrupted event payload: this leaves the entity permanently
++                // stuck in its loading state rather than surfacing an error.
++                System.err.println(s"[entity $id/${entityKind.name}] failed to load recovery page: $error")
++                error.printStackTrace()
++            }
++          state
++        case ActorCommand.RecoveryPageLoaded(rawEnvelopes) =>
++          val nextEnvelopes = rawEnvelopes.map(decodeEnvelope)
++          if nextEnvelopes.isEmpty then {
++            eventsInQueue.foreach(send)
++            Loaded(currentSequenceNumber, currentState, passivating = false)
++          } else {
++            val newState =
++              nextEnvelopes.foldLeft(currentState)((state, envelope) => eventHandler(envelope.event, state))
++            val nextSequenceNumber = nextEnvelopes.last.sequenceNumber
++            send(ActorCommand.LoadNext())
++            LoadingState(nextSequenceNumber, newState, eventsInQueue)
++          }
++        case ActorCommand.Wrapper(command) =>
++          LoadingState(currentSequenceNumber, currentState, eventsInQueue :+ ActorCommand.Wrapper(command))
++        case ActorCommand.Passivate() =>
++          // too soon to passivate, we wait for later
++          LoadingState(currentSequenceNumber, currentState, eventsInQueue :+ ActorCommand.Passivate())
++        case ActorCommand.CommandHandled(_) | ActorCommand.PersistFailed(_) => state // unreachable here
++      })
++
++  private case class Loaded(lastSequenceNumber: Int, entity: EntityState, passivating: Boolean)
++      extends TheState({
++        case ActorCommand.LoadNext() => state
++        case ActorCommand.Wrapper(command) =>
++          handleEffect(lastSequenceNumber, entity, commandHandler(command, entity, id)).onComplete {
++            case Success(resolved) => send(ActorCommand.CommandHandled(resolved))
++            case Failure(error)    => send(ActorCommand.PersistFailed(error))
++          }
++          Processing(lastSequenceNumber, entity, passivating, queued = Vector.empty)
++        case ActorCommand.Passivate() =>
++          if !passivating then {
++            // need to put back passivate at end of queue. In this state we know this has to be last message now
++            send(ActorCommand.Passivate())
++            Loaded(lastSequenceNumber, entity, passivating = true)
++          } else
++            supervisor.send(Supervisor.EntityIsNowPassive(id, entityKind.name))
++            Passive()
++        case ActorCommand.RecoveryPageLoaded(_) | ActorCommand.CommandHandled(_) | ActorCommand.PersistFailed(_) =>
++          state // unreachable here
++      })
++
++  /** Buffers incoming commands (and passivation requests) while a command's effect is being applied
++    * asynchronously — mirrors [[LoadingState]]'s buffering of commands arriving mid-recovery.
++    */
++  private case class Processing(
++      lastSequenceNumber: Int,
++      entity: EntityState,
++      passivating: Boolean,
++      queued: Vector[ActorCommand[Command]]
++  ) extends TheState({
++        case ActorCommand.LoadNext() => state
++        case ActorCommand.Wrapper(command) =>
++          Processing(lastSequenceNumber, entity, passivating, queued :+ ActorCommand.Wrapper(command))
++        case ActorCommand.Passivate() =>
++          Processing(lastSequenceNumber, entity, passivating, queued :+ ActorCommand.Passivate())
++        case ActorCommand.CommandHandled(result) =>
++          val (nextSequenceNumber, nextState) = result.asInstanceOf[(Int, EntityState)]
++          queued.foreach(send)
++          Loaded(nextSequenceNumber, nextState, passivating)
++        case ActorCommand.PersistFailed(error) =>
++          // TODO: route through a real logger instead, once one exists in this codebase. Same
++          // known-fragility as a corrupted event payload: this leaves the entity permanently stuck,
++          // buffering further commands, rather than surfacing an error.
++          System.err.println(s"[entity $id/${entityKind.name}] failed to persist effect: $error")
++          error.printStackTrace()
++          state
++        case ActorCommand.RecoveryPageLoaded(_) => state // unreachable here
++      })
++
++  private case class Passive()
++      extends TheState({ command =>
++        println(s"Received this command, weird ($id): $command")
++        state
++      })
++
++  override def initialState: EventSourcedActor.this.State = LoadingState(0, entityInfo.initialState, Vector.empty)
++}
++
++private[eventsourcing] object EventSourcedActor {
++
++  private[eventsourcing] enum ActorCommand[Command]:
++    case LoadNext[C]()          extends ActorCommand[C]
++    case Wrapper[C](command: C) extends ActorCommand[C]
++    case Passivate[C]()         extends ActorCommand[C]
++
++    // -- internal continuations, only ever sent by an EventSourcedActor to itself --
++
++    /** One page of recovery events came back from the store (possibly empty, meaning recovery is done). */
++    case RecoveryPageLoaded[C](envelopes: Vector[RawEventEnvelope]) extends ActorCommand[C]
++
++    /** A command's effect finished being applied. `result` is really `(Int, EntityState)` for the
++      * enclosing [[EventSourcedActor]] instance — `EntityState` can't be a type parameter here, since
++      * [[Supervisor]] holds actors of this type uniformly across many different concrete `EntityState`s.
++      * This case is only ever constructed and consumed by the very instance that sent it, so the cast
++      * back in [[EventSourcedActor.Processing]] is safe.
++      */
++    case CommandHandled[C](result: (Int, Any)) extends ActorCommand[C]
++
++    /** A command's effect failed to persist. */
++    case PersistFailed[C](error: Throwable) extends ActorCommand[C]
++
++}
+diff --git a/server/src/main/scala/eventsourcing/EventSourcingService.scala b/common/src/main/scala/eventsourcing/EventSourcingService.scala
+similarity index 81%
+rename from server/src/main/scala/eventsourcing/EventSourcingService.scala
+rename to common/src/main/scala/eventsourcing/EventSourcingService.scala
+index 9d50f52..af812bb 100644
+--- a/server/src/main/scala/eventsourcing/EventSourcingService.scala
++++ b/common/src/main/scala/eventsourcing/EventSourcingService.scala
+@@ -1,25 +1,26 @@
+ package eventsourcing
+ 
+ import be.doeraene.utils.testshenanigans.OnlyInTest
+-import scalasql.simple.SqliteDialect
+ 
+-import java.time.temporal.{ChronoUnit, TemporalUnit}
+ import java.util.concurrent.atomic.AtomicReference
++import scala.concurrent.Future
+ import scala.concurrent.duration.{DurationInt, FiniteDuration}
+ 
+ class EventSourcingService(
+     config: EventSourcingService.Config,
+-    client: scalasql.DbClient.DataSource,
++    eventStore: EventStore,
++    scheduler: Scheduler,
+     isInTest: Boolean = false
+ )(using
+     castor.Context
+ ) {
+-  import SqliteDialect.*
+-
+-  private val db = client.getAutoCommitClientConnection
+ 
+   private val supervisor =
+-    Supervisor(db, config = config.copy(removeIdleEntities = !isInTest && config.removeIdleEntities))
++    Supervisor(
++      eventStore,
++      scheduler,
++      config = config.copy(removeIdleEntities = !isInTest && config.removeIdleEntities)
++    )
+ 
+   def entity[Command, Event, State](id: Int, info: EntityInformation[Command, Event, State]): castor.Actor[Command] =
+     case class Entity(id: Int, kind: EntityKind[Command, ?])
+@@ -38,10 +39,8 @@ class EventSourcingService(
+     * @param entityKind
+     *   kind of entity for which you want the last id.
+     */
+-  def lastEntityId(entityKind: EntityKind[?, ?]): Option[Int] =
+-    db.run(RawEventEnvelope.select.filter(_.entityKind === entityKind.name).sortBy(_.entityId).desc.take(1))
+-      .headOption
+-      .map(_.entityId)
++  def lastEntityId(entityKind: EntityKind[?, ?]): Future[Option[Int]] =
++    eventStore.lastEntityId(entityKind.name)
+ 
+   /** Registers a [[Projection]] against the events of one entity kind and starts it running immediately. If the log
+     * already has events for that kind, they are delivered first, in order, exactly as if they were happening live —
+@@ -58,7 +57,9 @@ class EventSourcingService(
+     val registeredProjections = registeredProjectionsRef.getAndUpdate(prev => prev + projection.name)
+     if registeredProjections.contains(projection.name) then
+       throw IllegalArgumentException(s"Projection with name ${projection.name} is already registered")
+-    ProjectionRunner.ProjectionHandle(ProjectionRunner(db, entityInfo, projection, pollInterval, autoPoll = !isInTest))
++    ProjectionRunner.ProjectionHandle(
++      ProjectionRunner(eventStore, scheduler, entityInfo, projection, pollInterval, autoPoll = !isInTest)
++    )
+   }
+ 
+   private[eventsourcing] def cleanRegisteredProjection(name: String)(using OnlyInTest): Unit =
+@@ -68,7 +69,7 @@ class EventSourcingService(
+   private[eventsourcing] def clearMemory()(using OnlyInTest): Unit =
+     supervisor.send(Supervisor.ClearMemory())
+ 
+-  private[eventsourcing] def closeDb()(using OnlyInTest): Unit = db.close()
++  private[eventsourcing] def closeDb()(using OnlyInTest): Unit = eventStore.close()
+ 
+   private val registeredProjectionsRef = AtomicReference[Set[String]](Set.empty)
+ 
+diff --git a/common/src/main/scala/eventsourcing/EventStore.scala b/common/src/main/scala/eventsourcing/EventStore.scala
+new file mode 100644
+index 0000000..957134f
+--- /dev/null
++++ b/common/src/main/scala/eventsourcing/EventStore.scala
+@@ -0,0 +1,49 @@
++package eventsourcing
++
++import scala.concurrent.Future
++
++/** Abstracts over durable storage of the event log and projection checkpoints, so the rest of the
++  * event-sourcing machinery ([[EventSourcedActor]], [[Supervisor]], [[ProjectionRunner]],
++  * [[EventSourcingService]]) can be cross-compiled to any platform that can provide an implementation —
++  * e.g. backed by JDBC/sqlite on the JVM, or by a remote HTTP/WS store from JS. Every operation is
++  * asynchronous, since not every platform (JS in particular) can perform blocking database access.
++  */
++trait EventStore {
++
++  /** Appends the given envelopes to the log, in order. `offset` on each input envelope is ignored — the
++    * store assigns it.
++    */
++  def appendEnvelopes(envelopes: Vector[RawEventEnvelope]): Future[Unit]
++
++  /** Loads up to `pageSize` envelopes for one entity, in increasing sequence-number order, whose
++    * sequence number is strictly greater than `afterSequenceNumber`. Used to recover one entity's state.
++    */
++  def loadEnvelopes(
++      entityKind: String,
++      entityId: Int,
++      afterSequenceNumber: Int,
++      pageSize: Int
++  ): Future[Vector[RawEventEnvelope]]
++
++  /** Loads up to `pageSize` envelopes of one entity kind (across all entities), in increasing offset
++    * order, whose offset is strictly greater than `afterOffset`. Used by projections to catch up on and
++    * follow the log.
++    */
++  def loadEnvelopesByOffset(entityKind: String, afterOffset: Int, pageSize: Int): Future[Vector[RawEventEnvelope]]
++
++  /** Biggest entity id for which an event has been registered for that entity kind, if any. */
++  def lastEntityId(entityKind: String): Future[Option[Int]]
++
++  /** Offset of the most recently appended envelope of that entity kind, if any. */
++  def latestOffset(entityKind: String): Future[Option[Int]]
++
++  /** Persisted checkpoint offset for a projection, if it has ever run. */
++  def loadCheckpoint(projectionName: String): Future[Option[Int]]
++
++  /** Overwrites the persisted checkpoint offset for a projection (upsert). */
++  def saveCheckpoint(projectionName: String, offset: Int): Future[Unit]
++
++  /** Resource cleanup hook. */
++  def close(): Unit
++
++}
+diff --git a/server/src/main/scala/eventsourcing/Projection.scala b/common/src/main/scala/eventsourcing/Projection.scala
+similarity index 100%
+rename from server/src/main/scala/eventsourcing/Projection.scala
+rename to common/src/main/scala/eventsourcing/Projection.scala
+diff --git a/common/src/main/scala/eventsourcing/ProjectionRunner.scala b/common/src/main/scala/eventsourcing/ProjectionRunner.scala
+new file mode 100644
+index 0000000..427ca86
+--- /dev/null
++++ b/common/src/main/scala/eventsourcing/ProjectionRunner.scala
+@@ -0,0 +1,179 @@
++package eventsourcing
++
++import be.doeraene.utils.testshenanigans.OnlyInTest
++import castor.SimpleActor
++
++import scala.concurrent.Future
++import scala.concurrent.duration.FiniteDuration
++import scala.util.control.NonFatal
++import scala.util.{Failure, Success}
++
++/** Drives one [[Projection]]: polls the event log for events of one entity kind past the projection's
++  * last saved checkpoint, applies them in order, and persists progress as it goes.
++  *
++  * One `ProjectionRunner` is one castor actor, so a given projection's events are always applied strictly
++  * in order, one at a time — independent projections run fully in parallel with each other and with the
++  * entity actors, since none of them share a mailbox.
++  *
++  * @param autoPoll
++  *   whether to keep re-scheduling itself after catching up (production). Tests should pass `false` and
++  *   drive catch-up explicitly via `poke()`, since a self-rescheduling timer would otherwise keep
++  *   `castor.Context.Test` permanently "active" and make `waitForInactivity()` hang forever.
++  */
++private[eventsourcing] class ProjectionRunner[Event, EntityState](
++    eventStore: EventStore,
++    scheduler: Scheduler,
++    entityInfo: EntityInformation[?, Event, EntityState],
++    projection: Projection[Event],
++    pollInterval: FiniteDuration,
++    autoPoll: Boolean
++)(using castor.Context)
++    extends castor.StateMachineActor[ProjectionRunner.Message] {
++  import ProjectionRunner.*
++
++  /** Runs the handler for one row, swallowing any exception (logging it) so a broken handler can never
++    * take the whole actor down. Returns whether it succeeded.
++    */
++  private def runHandler(row: RawEventEnvelope): Boolean =
++    try {
++      projection.handle(row.entityId, entityInfo.decodeEnvelope(row))
++      true
++    } catch {
++      case NonFatal(e) =>
++        // TODO: route through a real logger instead, once one exists in this codebase.
++        System.err.println(s"[projection ${projection.name}] handler failed for offset ${row.offset}: $e")
++        e.printStackTrace()
++        false
++    }
++
++  private def processAtLeastOnce(rows: List[RawEventEnvelope], cursor: Int): Future[Int] = rows match {
++    case row :: rest =>
++      if runHandler(row) then
++        eventStore.saveCheckpoint(projection.name, row.offset).flatMap(_ => processAtLeastOnce(rest, row.offset))
++      else Future.successful(cursor) // stop here: this event (and the rest of the batch) is retried on the next tick
++    case Nil => Future.successful(cursor)
++  }
++
++  private def processAtMostOnce(rows: List[RawEventEnvelope], cursor: Int): Future[Int] = rows match {
++    case row :: rest =>
++      eventStore.saveCheckpoint(projection.name, row.offset).flatMap { _ => // commit *before* handling: a
++        // crash from here on just skips this event
++        runHandler(row) // best-effort; failure or not, we never come back to it
++        processAtMostOnce(rest, row.offset)
++      }
++    case Nil => Future.successful(cursor)
++  }
++
++  private def replyIsUpToDate(replyTo: castor.Actor[Boolean], cursor: Int): Unit =
++    eventStore.latestOffset(entityInfo.entityKind.name).onComplete {
++      case Success(latest) => replyTo.send(cursor >= latest.getOrElse(-1))
++      case Failure(error)  =>
++        System.err.println(s"[projection ${projection.name}] failed to check up-to-date-ness: $error")
++        error.printStackTrace()
++        replyTo.send(false)
++    }
++
++  private sealed abstract class TheState(handler: Message => State) extends State(handler)
++
++  /** Initial state: waiting for the persisted checkpoint to load before doing anything else, buffering
++    * `IsUpToDate` queries in the meantime (mirrors [[EventSourcedActor]]'s recovery buffering).
++    */
++  private case class LoadingCheckpoint(bufferedIsUpToDate: Vector[IsUpToDate]) extends TheState({
++        case Tick()                 => state // stray: the first Tick is fired once the checkpoint is known
++        case IsUpToDate(replyTo)    => LoadingCheckpoint(bufferedIsUpToDate :+ IsUpToDate(replyTo))
++        case CheckpointLoaded(offset) =>
++          send(Tick()) // kick off the first catch-up/delivery cycle immediately
++          bufferedIsUpToDate.foreach(send)
++          Idle(offset)
++        case BatchProcessed(_, _) | BatchFailed(_) => state // unreachable here
++      })
++
++  private case class Idle(cursor: Int)
++      extends TheState({
++        case Tick() =>
++          eventStore.loadEnvelopesByOffset(entityInfo.entityKind.name, cursor, projection.batchSize).onComplete {
++            case Success(batch) =>
++              val processed = projection.semantics match {
++                case Projection.Semantics.AtLeastOnce => processAtLeastOnce(batch.toList, cursor)
++                case Projection.Semantics.AtMostOnce  => processAtMostOnce(batch.toList, cursor)
++              }
++              processed.onComplete {
++                case Success(newCursor) => send(BatchProcessed(newCursor, batch.sizeIs == projection.batchSize))
++                case Failure(error)     => send(BatchFailed(error))
++              }
++            case Failure(error) => send(BatchFailed(error))
++          }
++          Fetching(cursor, tickPending = false)
++        case IsUpToDate(replyTo) =>
++          replyIsUpToDate(replyTo, cursor)
++          state
++        case CheckpointLoaded(_) | BatchProcessed(_, _) | BatchFailed(_) => state // unreachable here
++      })
++
++  /** A `Tick()` is in flight (its batch was fetched and/or is being processed). Further ticks are
++    * coalesced rather than dropped, so a `poke()` landing mid-batch still forces one more catch-up cycle
++    * once the current one finishes.
++    */
++  private case class Fetching(cursor: Int, tickPending: Boolean)
++      extends TheState({
++        case Tick()              => Fetching(cursor, tickPending = true)
++        case IsUpToDate(replyTo) =>
++          replyIsUpToDate(replyTo, cursor)
++          state
++        case BatchProcessed(newCursor, batchWasFull) =>
++          if batchWasFull || tickPending then {
++            // there may be more waiting right behind it (or a poke() arrived meanwhile): keep catching up
++            send(Tick())
++            Fetching(newCursor, tickPending = false)
++          } else if autoPoll then {
++            scheduler.scheduleOnce(pollInterval)(() => send(Tick()))
++            Idle(newCursor)
++          } else Idle(newCursor) // caught up, auto-polling off (test mode): sit idle until poke() is called
++        case BatchFailed(error) =>
++          // TODO: route through a real logger instead, once one exists in this codebase.
++          System.err.println(s"[projection ${projection.name}] failed to fetch/process a batch: $error")
++          error.printStackTrace()
++          Idle(cursor) // retried on the next tick (autoPoll timer or poke())
++        case CheckpointLoaded(_) => state // unreachable here
++      })
++
++  override def initialState: State = LoadingCheckpoint(Vector.empty)
++
++  eventStore.loadCheckpoint(projection.name).onComplete {
++    case Success(offset) => send(CheckpointLoaded(offset.getOrElse(0)))
++    case Failure(error)  =>
++      System.err.println(s"[projection ${projection.name}] failed to load checkpoint: $error")
++      error.printStackTrace()
++  }
++
++  /** For tests: force one catch-up cycle, without waiting for the automatic poll timer. */
++  private[eventsourcing] def poke(): Unit = send(Tick())
++}
++
++object ProjectionRunner {
++  private[eventsourcing] sealed trait Message
++  private[eventsourcing] case class Tick()                                     extends Message
++  private[eventsourcing] case class IsUpToDate(replyTo: castor.Actor[Boolean]) extends Message
++
++  // -- internal continuations, only ever sent by a ProjectionRunner to itself --
++  private[eventsourcing] case class CheckpointLoaded(offset: Int)                          extends Message
++  private[eventsourcing] case class BatchProcessed(newCursor: Int, batchWasFull: Boolean) extends Message
++  private[eventsourcing] case class BatchFailed(error: Throwable)                          extends Message
++
++  /** Handle to a running projection. Only really useful in tests: `poke()` forces one catch-up cycle
++    * immediately, instead of waiting for the automatic poll timer.
++    */
++  final class ProjectionHandle private[eventsourcing] (runner: ProjectionRunner[?, ?])(using castor.Context) {
++    def poke()(using OnlyInTest): Unit = runner.poke()
++
++    def isUpToDate: Future[Boolean] = {
++      val promise    = scala.concurrent.Promise[Boolean]()
++      val replyActor = new SimpleActor[Boolean]() {
++        override def run(msg: Boolean): Unit = promise.success(msg)
++      }
++      runner.send(IsUpToDate(replyActor))
++      promise.future
++    }
++  }
++
++}
+diff --git a/common/src/main/scala/eventsourcing/RawEventEnvelope.scala b/common/src/main/scala/eventsourcing/RawEventEnvelope.scala
+new file mode 100644
+index 0000000..bea4baf
+--- /dev/null
++++ b/common/src/main/scala/eventsourcing/RawEventEnvelope.scala
+@@ -0,0 +1,14 @@
++package eventsourcing
++
++/** Plain, storage-agnostic representation of one persisted event, as read from or written to an
++  * [[EventStore]]. `offset` is a global, gapless, per-store insertion order used by projections; it is
++  * assigned by the store itself, and should be treated as opaque/ignored when appending new envelopes.
++  */
++case class RawEventEnvelope(
++    offset: Int,
++    entityId: Int,
++    sequenceNumber: Int,
++    eventPayload: String,
++    entityKind: String,
++    timestamp: Long
++)
+diff --git a/common/src/main/scala/eventsourcing/Scheduler.scala b/common/src/main/scala/eventsourcing/Scheduler.scala
+new file mode 100644
+index 0000000..00ddffb
+--- /dev/null
++++ b/common/src/main/scala/eventsourcing/Scheduler.scala
+@@ -0,0 +1,12 @@
++package eventsourcing
++
++import scala.concurrent.duration.FiniteDuration
++
++/** Abstracts over "run this action once, after a delay" — the one piece of platform-specific timing
++  * [[Supervisor]] (idle-entity sweep) and [[ProjectionRunner]] (poll timer) need. `castor.Context` itself
++  * can't be used directly for this: `scheduleMsg` is only available on castor's JVM build, not its JS
++  * build (true as of the latest published version, 0.3.2, on both platforms).
++  */
++trait Scheduler {
++  def scheduleOnce(delay: FiniteDuration)(action: () => Unit): Unit
++}
+diff --git a/server/src/main/scala/eventsourcing/Supervisor.scala b/common/src/main/scala/eventsourcing/Supervisor.scala
+similarity index 93%
+rename from server/src/main/scala/eventsourcing/Supervisor.scala
+rename to common/src/main/scala/eventsourcing/Supervisor.scala
+index ac16615..daa3a1a 100644
+--- a/server/src/main/scala/eventsourcing/Supervisor.scala
++++ b/common/src/main/scala/eventsourcing/Supervisor.scala
+@@ -1,11 +1,8 @@
+ package eventsourcing
+ 
+-import scalasql.simple.DbApi
+-
+-import java.time.temporal.ChronoUnit
+-
+ private[eventsourcing] class Supervisor(
+-    db: DbApi,
++    eventStore: EventStore,
++    scheduler: Scheduler,
+     config: EventSourcingService.Config
+ )(using castor.Context)
+     extends castor.StateMachineActor[Supervisor.SupervisorMessage] {
+@@ -23,7 +20,7 @@ private[eventsourcing] class Supervisor(
+                 EventSourcedActor(
+                   id,
+                   entityInfo,
+-                  db,
++                  eventStore,
+                   config,
+                   castor.ProxyActor[EntityIsNowPassive, SupervisorMessage](identity, this)
+                 )
+@@ -87,12 +84,8 @@ private[eventsourcing] class Supervisor(
+ 
+   override def initialState: State = TheState(Map.empty)
+ 
+-  private def scheduleCheckIdleEntities(): Unit = summon[castor.Context]
+-    .scheduleMsg(
+-      this,
+-      Supervisor.CheckIdleEntities(),
+-      java.time.Duration.of(config.entityIdleShutdownTime.toMillis / 2, ChronoUnit.MILLIS)
+-    )
++  private def scheduleCheckIdleEntities(): Unit =
++    scheduler.scheduleOnce(config.entityIdleShutdownTime / 2)(() => send(Supervisor.CheckIdleEntities()))
+ 
+   if config.removeIdleEntities then {
+     println(s"Launching idle entities routine.")
+diff --git a/server/src/main/scala/be/doeraene/entry/StopMotionLabServer.scala b/server/src/main/scala/be/doeraene/entry/StopMotionLabServer.scala
+index 4f6222e..e1d37f5 100644
+--- a/server/src/main/scala/be/doeraene/entry/StopMotionLabServer.scala
++++ b/server/src/main/scala/be/doeraene/entry/StopMotionLabServer.scala
+@@ -18,7 +18,12 @@ import scala.util.chaining.*
+ object StopMotionLabServer extends cask.MainRoutes {
+ 
+   given DatabaseService      = DatabaseService(Paths.get("./data/db"))
+-  given EventSourcingService = EventSourcingService(EventSourcingService.Config.default, summon[DatabaseService].client)
++  given EventSourcingService =
++    EventSourcingService(
++      EventSourcingService.Config.default,
++      eventsourcing.SqlEventStore(summon[DatabaseService].client),
++      eventsourcing.CastorScheduler()
++    )
+   given FileStorageService   = FileStorageService(Paths.get("./data/storage"))
+   given ImagesService        = ImagesService()
+   given MoviesService        = MoviesService()
+diff --git a/server/src/main/scala/be/doeraene/services/database/tables/globals.scala b/server/src/main/scala/be/doeraene/services/database/tables/globals.scala
+index aa959d2..e6b79ec 100644
+--- a/server/src/main/scala/be/doeraene/services/database/tables/globals.scala
++++ b/server/src/main/scala/be/doeraene/services/database/tables/globals.scala
+@@ -36,3 +36,16 @@ object Image extends SimpleTable[Image]
+ 
+ case class MovieToImage(movieId: Int, imageUUID: java.util.UUID, imageIndexInMovie: Option[Int])
+ object MovieToImage extends SimpleTable[MovieToImage]
++
++case class RawEventEnvelope(
++    offset: Int,
++    entityId: Int,
++    sequenceNumber: Int,
++    eventPayload: String,
++    entityKind: String,
++    timestamp: Long
++)
++object RawEventEnvelope extends SimpleTable[RawEventEnvelope]
++
++case class ProjectionCheckpoint(projectionName: String, lastOffset: Int, updatedAt: Long)
++object ProjectionCheckpoint extends SimpleTable[ProjectionCheckpoint]
+diff --git a/server/src/main/scala/be/doeraene/services/movies/MoviesService.scala b/server/src/main/scala/be/doeraene/services/movies/MoviesService.scala
+index 3e332bd..ef15040 100644
+--- a/server/src/main/scala/be/doeraene/services/movies/MoviesService.scala
++++ b/server/src/main/scala/be/doeraene/services/movies/MoviesService.scala
+@@ -106,11 +106,11 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
+         case None        => attempt()
+         case Some(movie) => promise.success(movie.id)
+       }
+-      def attempt(): Unit = {
+-        val idAttempt  = eventSourcing.lastEntityId(entityInfo.entityKind).getOrElse(-1) + 1
+-        val movieActor = eventSourcing.entity(idAttempt, entityInfo)
+-        movieActor.send(Movie.Command.Create(this))
+-      }
++      def attempt(): Unit =
++        eventSourcing.lastEntityId(entityInfo.entityKind).foreach { last =>
++          val movieActor = eventSourcing.entity(last.getOrElse(-1) + 1, entityInfo)
++          movieActor.send(Movie.Command.Create(this))
++        }
+     }
+ 
+     MovieCreator(java.util.UUID.randomUUID()).attempt()
+diff --git a/server/src/main/scala/eventsourcing/CastorScheduler.scala b/server/src/main/scala/eventsourcing/CastorScheduler.scala
+new file mode 100644
+index 0000000..0e494bc
+--- /dev/null
++++ b/server/src/main/scala/eventsourcing/CastorScheduler.scala
+@@ -0,0 +1,19 @@
++package eventsourcing
++
++import java.time.temporal.ChronoUnit
++import scala.concurrent.duration.FiniteDuration
++
++/** JVM-only [[Scheduler]] implementation, backed by `castor.Context.scheduleMsg` (a capability that only
++  * exists on castor's JVM build). Reuses castor's own scheduling machinery via a throwaway one-shot actor,
++  * so a scheduled action is tracked the same way any other actor message would be (relevant for
++  * `castor.Context.Test.waitForInactivity()`, even though in practice neither `Supervisor` nor
++  * `ProjectionRunner` ever schedule anything while `isInTest = true`).
++  */
++class CastorScheduler(using ctx: castor.Context) extends Scheduler {
++  override def scheduleOnce(delay: FiniteDuration)(action: () => Unit): Unit = {
++    val actor = new castor.SimpleActor[Unit] {
++      override def run(msg: Unit): Unit = action()
++    }
++    ctx.scheduleMsg(actor, (), java.time.Duration.of(delay.toMillis, ChronoUnit.MILLIS))
++  }
++}
+diff --git a/server/src/main/scala/eventsourcing/EventSourcedActor.scala b/server/src/main/scala/eventsourcing/EventSourcedActor.scala
+deleted file mode 100644
+index 1df9cd0..0000000
+--- a/server/src/main/scala/eventsourcing/EventSourcedActor.scala
++++ /dev/null
+@@ -1,115 +0,0 @@
+-package eventsourcing
+-
+-import eventsourcing.EventSourcedActor.ActorCommand
+-import scalasql.simple.{DbApi, SqliteDialect}
+-
+-private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
+-    id: Int,
+-    entityInfo: EntityInformation[Command, Event, EntityState],
+-    db: DbApi,
+-    config: EventSourcingService.Config,
+-    supervisor: castor.Actor[Supervisor.EntityIsNowPassive]
+-)(using castor.Context)
+-    extends castor.StateMachineActor[ActorCommand[Command]] {
+-  import SqliteDialect.*
+-
+-  import entityInfo.*
+-
+-  private def handleEffect(
+-      lastSequenceNumber: Int,
+-      currentState: EntityState,
+-      effect: Effect[Event, EntityState]
+-  ): (Int, EntityState) = effect match {
+-    case Effect.Persist(event) =>
+-      handleEffect(lastSequenceNumber, currentState, Effect.PersistMultiple(Vector(event)))
+-    case Effect.PersistMultiple(events) =>
+-      val startingSequenceNumber = lastSequenceNumber + 1
+-
+-      val nextState = events.foldLeft(currentState)((s, e) => eventHandler(e, s))
+-      val envelopes = events.zipWithIndex
+-        .map((event, index) => (event, startingSequenceNumber + index))
+-        .map((event, sequenceNumber) =>
+-          EventEnvelope[Event, EntityState](id, sequenceNumber, event, System.currentTimeMillis() / 1000)
+-        )
+-      db.run(
+-        RawEventEnvelope.insert.values(envelopes.map(encodeEnvelope)*).skipColumns(_.offset)
+-      )
+-      (envelopes.map(_.sequenceNumber).maxOption.getOrElse(lastSequenceNumber), nextState)
+-    case Effect.WithSideEffect(effect, sideEffect) =>
+-      val resolved = handleEffect(lastSequenceNumber, currentState, effect)
+-      sideEffect(resolved._2)
+-      resolved
+-    case Effect.Ignore()                  => (lastSequenceNumber, currentState)
+-    case Effect.ReplyTo(replyTo, message) =>
+-      handleEffect(lastSequenceNumber, currentState, Effect.Ignore().thenReply(replyTo)(message))
+-  }
+-
+-  private sealed abstract class TheState(handler: ActorCommand[Command] => State) extends State(handler)
+-  private case class LoadingState(
+-      currentSequenceNumber: Int,
+-      currentState: EntityState,
+-      eventsInQueue: Vector[ActorCommand[Command]]
+-  ) extends TheState({
+-        case ActorCommand.LoadNext() =>
+-          val nextEnvelopes: Vector[EventEnvelope[Event, EntityState]] = db
+-            .run(
+-              RawEventEnvelope.select
+-                .filter(envelope => envelope.entityId === id && envelope.entityKind === entityKind.name)
+-                .sortBy(_.sequenceNumber)
+-                .drop(currentSequenceNumber)
+-                .take(config.eventPageSize)
+-            )
+-            .toVector
+-            .map(decodeEnvelope)
+-          if nextEnvelopes.isEmpty then {
+-            eventsInQueue.foreach(send)
+-            Loaded(currentSequenceNumber, currentState, passivating = false)
+-          } else {
+-            val newState =
+-              nextEnvelopes.foldLeft(currentState)((state, envelope) => eventHandler(envelope.event, state))
+-            val nextSequenceNumber = nextEnvelopes.last.sequenceNumber
+-            send(ActorCommand.LoadNext())
+-            LoadingState(nextSequenceNumber, newState, eventsInQueue)
+-          }
+-        case ActorCommand.Wrapper(command) =>
+-          LoadingState(currentSequenceNumber, currentState, eventsInQueue :+ ActorCommand.Wrapper(command))
+-        case ActorCommand.Passivate() =>
+-          // too soon to passivate, we wait for later
+-          LoadingState(currentSequenceNumber, currentState, eventsInQueue :+ ActorCommand.Passivate())
+-      })
+-  private case class Loaded(lastSequenceNumber: Int, entity: EntityState, passivating: Boolean)
+-      extends TheState({
+-        case ActorCommand.LoadNext()       => state
+-        case ActorCommand.Wrapper(command) =>
+-          val (nextSequenceNumber, nextState) = handleEffect(
+-            lastSequenceNumber,
+-            entity,
+-            commandHandler(command, entity, id)
+-          )
+-          Loaded(nextSequenceNumber, nextState, passivating)
+-        case ActorCommand.Passivate() =>
+-          if !passivating then {
+-            // need to put back passivate at end of queue. In this state we know this has to be last message now
+-            send(ActorCommand.Passivate())
+-            Loaded(lastSequenceNumber, entity, passivating = true)
+-          } else
+-            supervisor.send(Supervisor.EntityIsNowPassive(id, entityKind.name))
+-            Passive()
+-      })
+-  private case class Passive()
+-      extends TheState({ command =>
+-        println(s"Received this command, weird ($id): $command")
+-        state
+-      })
+-
+-  override def initialState: EventSourcedActor.this.State = LoadingState(0, entityInfo.initialState, Vector.empty)
+-}
+-
+-private[eventsourcing] object EventSourcedActor {
+-
+-  private[eventsourcing] enum ActorCommand[Command]:
+-    case LoadNext[C]()          extends ActorCommand[C]
+-    case Wrapper[C](command: C) extends ActorCommand[C]
+-    case Passivate[C]()         extends ActorCommand[C]
+-
+-}
+diff --git a/server/src/main/scala/eventsourcing/ProjectionCheckpoint.scala b/server/src/main/scala/eventsourcing/ProjectionCheckpoint.scala
+deleted file mode 100644
+index d603f35..0000000
+--- a/server/src/main/scala/eventsourcing/ProjectionCheckpoint.scala
++++ /dev/null
+@@ -1,16 +0,0 @@
+-package eventsourcing
+-
+-import scalasql.simple.SimpleTable
+-
+-/** Durable progress marker for one registered [[Projection]]: the offset (into
+-  * `raw_event_envelope`) up through which it has committed. Kept in the database, not in
+-  * memory, so a projection resumes from where it left off across restarts — this is what makes
+-  * "at least once" a guarantee rather than a best effort.
+-  */
+-private[eventsourcing] case class ProjectionCheckpoint(
+-    projectionName: String,
+-    lastOffset: Int,
+-    updatedAt: Long
+-)
+-
+-private[eventsourcing] object ProjectionCheckpoint extends SimpleTable[ProjectionCheckpoint]
+diff --git a/server/src/main/scala/eventsourcing/ProjectionRunner.scala b/server/src/main/scala/eventsourcing/ProjectionRunner.scala
+deleted file mode 100644
+index f5b0a52..0000000
+--- a/server/src/main/scala/eventsourcing/ProjectionRunner.scala
++++ /dev/null
+@@ -1,169 +0,0 @@
+-package eventsourcing
+-
+-import be.doeraene.utils.testshenanigans.OnlyInTest
+-import castor.SimpleActor
+-import scalasql.simple.{DbApi, SqliteDialect}
+-
+-import java.time.temporal.ChronoUnit
+-import scala.concurrent.Future
+-import scala.concurrent.duration.FiniteDuration
+-import scala.util.control.NonFatal
+-
+-/** Drives one [[Projection]]: polls `raw_event_envelope` for events of one entity kind past the projection's last saved
+-  * checkpoint, applies them in order, and persists progress as it goes.
+-  *
+-  * One `ProjectionRunner` is one castor actor, so a given projection's events are always applied strictly in order, one
+-  * at a time — independent projections run fully in parallel with each other and with the entity actors, since none of
+-  * them share a mailbox.
+-  *
+-  * @param autoPoll
+-  *   whether to keep re-scheduling itself after catching up (production). Tests should pass `false` and drive catch-up
+-  *   explicitly via `poke()`, since a self-rescheduling timer would otherwise keep `castor.Context.Test` permanently
+-  *   "active" and make `waitForInactivity()` hang forever.
+-  */
+-private[eventsourcing] class ProjectionRunner[Event, EntityState](
+-    db: DbApi,
+-    entityInfo: EntityInformation[?, Event, EntityState],
+-    projection: Projection[Event],
+-    pollInterval: FiniteDuration,
+-    autoPoll: Boolean
+-)(using castor.Context)
+-    extends castor.StateMachineActor[ProjectionRunner.Message] {
+-  import ProjectionRunner.*
+-  import SqliteDialect.*
+-
+-  private def loadCheckpoint(): Int =
+-    db.run(ProjectionCheckpoint.select.filter(_.projectionName === projection.name))
+-      .toVector
+-      .headOption
+-      .map(_.lastOffset)
+-      .getOrElse(0)
+-
+-  private def saveCheckpoint(offset: Int): Unit = {
+-    val exists = db.run(ProjectionCheckpoint.select.filter(_.projectionName === projection.name)).toVector.nonEmpty
+-    if exists then
+-      db.run(
+-        ProjectionCheckpoint
+-          .update(_.projectionName === projection.name)
+-          .set(_.lastOffset := offset, _.updatedAt := System.currentTimeMillis())
+-      )
+-    else
+-      db.run(
+-        ProjectionCheckpoint.insert.values(
+-          ProjectionCheckpoint(projection.name, offset, System.currentTimeMillis())
+-        )
+-      )
+-  }
+-
+-  /** Runs the handler for one row, swallowing any exception (logging it) so a broken handler can never take the whole
+-    * actor down. Returns whether it succeeded.
+-    */
+-  private def runHandler(row: RawEventEnvelope): Boolean =
+-    try {
+-      projection.handle(row.entityId, entityInfo.decodeEnvelope(row))
+-      true
+-    } catch {
+-      case NonFatal(e) =>
+-        // TODO: route through a real logger instead, once one exists in this codebase.
+-        System.err.println(s"[projection ${projection.name}] handler failed for offset ${row.offset}: $e")
+-        e.printStackTrace()
+-        false
+-    }
+-
+-  @annotation.tailrec
+-  private def processAtLeastOnce(rows: List[RawEventEnvelope], cursor: Int): Int = rows match {
+-    case row :: rest =>
+-      if runHandler(row) then {
+-        saveCheckpoint(row.offset)
+-        processAtLeastOnce(rest, row.offset)
+-      } else cursor // stop here: this event (and the rest of the batch) is retried on the next tick
+-    case Nil => cursor
+-  }
+-
+-  @annotation.tailrec
+-  private def processAtMostOnce(rows: List[RawEventEnvelope], cursor: Int): Int = rows match {
+-    case row :: rest =>
+-      saveCheckpoint(row.offset) // commit *before* handling: a crash from here on just skips this event
+-      runHandler(row)            // best-effort; failure or not, we never come back to it
+-      processAtMostOnce(rest, row.offset)
+-    case Nil => cursor
+-  }
+-
+-  private case class TheState(cursor: Int)
+-      extends State({
+-        case Tick() =>
+-          val batch = db
+-            .run(
+-              RawEventEnvelope.select
+-                .filter(e => e.offset > cursor && e.entityKind === entityInfo.entityKind.name)
+-                .sortBy(_.offset)
+-                .take(projection.batchSize)
+-            )
+-            .toVector
+-
+-          val newCursor = projection.semantics match {
+-            case Projection.Semantics.AtLeastOnce => processAtLeastOnce(batch.toList, cursor)
+-            case Projection.Semantics.AtMostOnce  => processAtMostOnce(batch.toList, cursor)
+-          }
+-
+-          if batch.sizeIs == projection.batchSize then {
+-            // the batch was full: there may be more waiting right behind it, so keep catching up
+-            // immediately instead of waiting out a full poll interval
+-            send(Tick())
+-          } else if autoPoll then {
+-            summon[castor.Context].scheduleMsg(
+-              this,
+-              Tick(),
+-              java.time.Duration.of(pollInterval.toMillis, ChronoUnit.MILLIS)
+-            )
+-          }
+-          // else: caught up, and auto-polling is off (test mode) — sit idle until `poke()` is called
+-
+-          TheState(newCursor)
+-        case IsUpToDate(replyTo) =>
+-          val latestEnvelope = db
+-            .run(
+-              RawEventEnvelope.select
+-                .filter(e => e.entityKind === entityInfo.entityKind.name)
+-                .sortBy(_.offset)
+-                .desc
+-                .map(_.offset)
+-                .take(1)
+-            )
+-            .headOption
+-            .getOrElse(-1)
+-          replyTo.send(cursor >= latestEnvelope)
+-          state
+-      })
+-
+-  override def initialState: State = TheState(loadCheckpoint())
+-
+-  // Kick off the first catch-up/delivery cycle immediately, without waiting for a first poll tick.
+-  send(Tick())
+-
+-  /** For tests: force one catch-up cycle, without waiting for the automatic poll timer. */
+-  private[eventsourcing] def poke(): Unit = send(Tick())
+-}
+-
+-object ProjectionRunner {
+-  private[eventsourcing] sealed trait Message
+-  private[eventsourcing] case class Tick()                                     extends Message
+-  private[eventsourcing] case class IsUpToDate(replyTo: castor.Actor[Boolean]) extends Message
+-
+-  /** Handle to a running projection. Only really useful in tests: `poke()` forces one catch-up cycle immediately,
+-    * instead of waiting for the automatic poll timer.
+-    */
+-  final class ProjectionHandle private[eventsourcing] (runner: ProjectionRunner[?, ?])(using castor.Context) {
+-    def poke()(using OnlyInTest): Unit = runner.poke()
+-
+-    def isUpToDate: Future[Boolean] = {
+-      val promise    = scala.concurrent.Promise[Boolean]()
+-      val replyActor = new SimpleActor[Boolean]() {
+-        override def run(msg: Boolean): Unit = promise.success(msg)
+-      }
+-      runner.send(IsUpToDate(replyActor))
+-      promise.future
+-    }
+-  }
+-
+-}
+diff --git a/server/src/main/scala/eventsourcing/RawEventEnvelope.scala b/server/src/main/scala/eventsourcing/RawEventEnvelope.scala
+deleted file mode 100644
+index 754921f..0000000
+--- a/server/src/main/scala/eventsourcing/RawEventEnvelope.scala
++++ /dev/null
+@@ -1,14 +0,0 @@
+-package eventsourcing
+-
+-import scalasql.simple.SimpleTable
+-
+-private[eventsourcing] case class RawEventEnvelope(
+-    offset: Int,
+-    entityId: Int,
+-    sequenceNumber: Int,
+-    eventPayload: String,
+-    entityKind: String,
+-    timestamp: Long
+-)
+-
+-private[eventsourcing] object RawEventEnvelope extends SimpleTable[RawEventEnvelope]
+diff --git a/server/src/main/scala/eventsourcing/SqlEventStore.scala b/server/src/main/scala/eventsourcing/SqlEventStore.scala
+new file mode 100644
+index 0000000..626a897
+--- /dev/null
++++ b/server/src/main/scala/eventsourcing/SqlEventStore.scala
+@@ -0,0 +1,135 @@
++package eventsourcing
++
++import be.doeraene.services.database.tables as db
++import scalasql.simple.SqliteDialect
++
++import scala.concurrent.Future
++
++/** JVM-only [[EventStore]] implementation, backed by `scalasql`/JDBC/sqlite (see
++  * `be.doeraene.services.database.DatabaseService`). The event log and checkpoint tables are mapped by
++  * `be.doeraene.services.database.tables.{RawEventEnvelope, ProjectionCheckpoint}` — kept in that package
++  * (rather than here, alongside the plain [[eventsourcing.RawEventEnvelope]] this class deals in) so that
++  * their table names (derived from the enclosing object's name) stay `raw_event_envelope` and
++  * `projection_checkpoint`, matching the existing migration, without colliding with the cross-platform
++  * type of the same simple name in this package.
++  *
++  * Every blocking scalasql call is wrapped via `castor.Context.future`, not a plain `Future { ... }`, so
++  * that `castor.Context.Test.waitForInactivity()` tracks it for its *entire* lifetime (from the moment the
++  * call is made, not just from whenever a later `.map`/`.foreach` continuation happens to get scheduled).
++  */
++class SqlEventStore(client: scalasql.DbClient.DataSource)(using ctx: castor.Context) extends EventStore {
++  import SqliteDialect.*
++
++  private val conn = client.getAutoCommitClientConnection
++
++  override def appendEnvelopes(envelopes: Vector[RawEventEnvelope]): Future[Unit] =
++    ctx.future {
++      conn.run(db.RawEventEnvelope.insert.values(envelopes.map(SqlEventStore.toRow)*).skipColumns(_.offset))
++      ()
++    }
++
++  override def loadEnvelopes(
++      entityKind: String,
++      entityId: Int,
++      afterSequenceNumber: Int,
++      pageSize: Int
++  ): Future[Vector[RawEventEnvelope]] =
++    ctx.future {
++      conn
++        .run(
++          db.RawEventEnvelope.select
++            .filter(envelope =>
++              envelope.entityId === entityId && envelope.entityKind === entityKind && envelope.sequenceNumber > afterSequenceNumber
++            )
++            .sortBy(_.sequenceNumber)
++            .take(pageSize)
++        )
++        .toVector
++        .map(SqlEventStore.toCommon)
++    }
++
++  override def loadEnvelopesByOffset(
++      entityKind: String,
++      afterOffset: Int,
++      pageSize: Int
++  ): Future[Vector[RawEventEnvelope]] =
++    ctx.future {
++      conn
++        .run(
++          db.RawEventEnvelope.select
++            .filter(envelope => envelope.offset > afterOffset && envelope.entityKind === entityKind)
++            .sortBy(_.offset)
++            .take(pageSize)
++        )
++        .toVector
++        .map(SqlEventStore.toCommon)
++    }
++
++  override def lastEntityId(entityKind: String): Future[Option[Int]] =
++    ctx.future {
++      conn
++        .run(db.RawEventEnvelope.select.filter(_.entityKind === entityKind).sortBy(_.entityId).desc.take(1))
++        .headOption
++        .map(_.entityId)
++    }
++
++  override def latestOffset(entityKind: String): Future[Option[Int]] =
++    ctx.future {
++      conn
++        .run(
++          db.RawEventEnvelope.select.filter(_.entityKind === entityKind).sortBy(_.offset).desc.map(_.offset).take(1)
++        )
++        .headOption
++    }
++
++  override def loadCheckpoint(projectionName: String): Future[Option[Int]] =
++    ctx.future {
++      conn
++        .run(db.ProjectionCheckpoint.select.filter(_.projectionName === projectionName))
++        .toVector
++        .headOption
++        .map(_.lastOffset)
++    }
++
++  override def saveCheckpoint(projectionName: String, offset: Int): Future[Unit] =
++    ctx.future {
++      val exists = conn.run(db.ProjectionCheckpoint.select.filter(_.projectionName === projectionName)).toVector.nonEmpty
++      if exists then
++        conn.run(
++          db.ProjectionCheckpoint
++            .update(_.projectionName === projectionName)
++            .set(_.lastOffset := offset, _.updatedAt := System.currentTimeMillis())
++        )
++      else
++        conn.run(
++          db.ProjectionCheckpoint.insert.values(db.ProjectionCheckpoint(projectionName, offset, System.currentTimeMillis()))
++        )
++      ()
++    }
++
++  override def close(): Unit = conn.close()
++}
++
++object SqlEventStore {
++
++  def toRow(envelope: RawEventEnvelope): db.RawEventEnvelope =
++    db.RawEventEnvelope(
++      offset = envelope.offset,
++      entityId = envelope.entityId,
++      sequenceNumber = envelope.sequenceNumber,
++      eventPayload = envelope.eventPayload,
++      entityKind = envelope.entityKind,
++      timestamp = envelope.timestamp
++    )
++
++  def toCommon(row: db.RawEventEnvelope): RawEventEnvelope =
++    RawEventEnvelope(
++      offset = row.offset,
++      entityId = row.entityId,
++      sequenceNumber = row.sequenceNumber,
++      eventPayload = row.eventPayload,
++      entityKind = row.entityKind,
++      timestamp = row.timestamp
++    )
++
++}
+diff --git a/server/src/test/scala/be/doeraene/services/movies/MoviesServiceTest.scala b/server/src/test/scala/be/doeraene/services/movies/MoviesServiceTest.scala
+index 66f9804..510b9cd 100644
+--- a/server/src/test/scala/be/doeraene/services/movies/MoviesServiceTest.scala
++++ b/server/src/test/scala/be/doeraene/services/movies/MoviesServiceTest.scala
+@@ -29,7 +29,12 @@ class MoviesServiceTest extends munit.FunSuite with HasTestPower {
+           }
+         }
+         given eventSourcingService: EventSourcingService =
+-          EventSourcingService(EventSourcingService.Config.default, databaseService.client, isInTest = true)
++          EventSourcingService(
++            EventSourcingService.Config.default,
++            eventsourcing.SqlEventStore(databaseService.client),
++            eventsourcing.CastorScheduler(),
++            isInTest = true
++          )
+         (MoviesService(), eventSourcingService, ac, databaseService)
+       },
+       teardown = { (movies, eventSourcing, ac, db) =>
+diff --git a/server/src/test/scala/eventsourcing/EventSourcingServiceTest.scala b/server/src/test/scala/eventsourcing/EventSourcingServiceTest.scala
+index 03c6233..a3ad850 100644
+--- a/server/src/test/scala/eventsourcing/EventSourcingServiceTest.scala
++++ b/server/src/test/scala/eventsourcing/EventSourcingServiceTest.scala
+@@ -1,6 +1,7 @@
+ package eventsourcing
+ 
+ import be.doeraene.services.database.DatabaseService
++import be.doeraene.services.database.tables.{RawEventEnvelope as DBRawEventEnvelope}
+ import be.doeraene.utils.testshenanigans.HasTestPower
+ import castor.Context
+ import eventsourcing.EventSourcingService.Config
+@@ -56,7 +57,7 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
+         val databaseService           = DatabaseService(Paths.get("./test-data/event-sourcing"), inTest = true)
+         given ac: castor.Context.Test = castor.Context.Test()
+         (
+-          EventSourcingService(config, databaseService.client, isInTest = true),
++          EventSourcingService(config, SqlEventStore(databaseService.client), CastorScheduler(), isInTest = true),
+           databaseService.client,
+           ac
+         )
+@@ -104,12 +105,12 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
+     ac.waitForInactivity()
+     assertEquals(response, 102)
+ 
+-    assertEquals(eventSourcing.lastEntityId(info.entityKind), Option(1))
++    assertEquals(Await.result(eventSourcing.lastEntityId(info.entityKind), 1.second), Option(1))
+ 
+     val db = client.getAutoCommitClientConnection
+     try {
+       val events: Vector[EventEnvelope[Event, Entity]] =
+-        db.run(RawEventEnvelope.select).toVector.map(info.decodeEnvelope)
++        db.run(DBRawEventEnvelope.select).toVector.map(SqlEventStore.toCommon).map(info.decodeEnvelope)
+       assertEquals(events.map(_.event), Vector.fill(102)(Event()))
+     } finally {
+       db.close()
+@@ -197,7 +198,7 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
+       val db = client.getAutoCommitClientConnection
+       try {
+         val events: Vector[EventEnvelope[Event, Entity]] =
+-          db.run(RawEventEnvelope.select).toVector.map(info.decodeEnvelope)
++          db.run(DBRawEventEnvelope.select).toVector.map(SqlEventStore.toCommon).map(info.decodeEnvelope)
+         assertEquals(events.count(_.entityId == 1), 4)
+         assertEquals(events.count(_.entityId == 2), 2)
+       } finally {
+@@ -249,7 +250,7 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
+ 
+     val db = client.getAutoCommitClientConnection
+     try {
+-      val events = db.run(RawEventEnvelope.select).toVector.map(info.decodeEnvelope)
++      val events = db.run(DBRawEventEnvelope.select).toVector.map(SqlEventStore.toCommon).map(info.decodeEnvelope)
+       assertEquals(events.count(_.entityId == 1), 7)
+     } finally db.close()
+   }
+@@ -296,7 +297,7 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
+ 
+       val db = client.getAutoCommitClientConnection
+       try {
+-        val rows = db.run(RawEventEnvelope.select).toVector
++        val rows = db.run(DBRawEventEnvelope.select).toVector
+         assertEquals(rows.count(_.entityKind == basicEntityInfo.entityKind.name), 1)
+         assertEquals(rows.count(_.entityKind == otherEntityInfo.entityKind.name), 2)
+       } finally db.close()
+@@ -325,7 +326,7 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
+     assertEquals(response, 0)
+ 
+     val db = client.getAutoCommitClientConnection
+-    try assertEquals(db.run(RawEventEnvelope.select).toVector, Vector.empty)
++    try assertEquals(db.run(DBRawEventEnvelope.select).toVector, Vector.empty)
+     finally db.close()
+   }
+ 
+@@ -374,9 +375,9 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
+     val db = client.getAutoCommitClientConnection
+     try {
+       db.run(
+-        RawEventEnvelope.insert
++        DBRawEventEnvelope.insert
+           .values(
+-            RawEventEnvelope(
++            DBRawEventEnvelope(
+               offset = 0,
+               entityId = 1,
+               sequenceNumber = 1,
+@@ -434,12 +435,12 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
+     }
+     ac.waitForInactivity()
+ 
+-    val lastId = eventSourcing.lastEntityId(info.entityKind)
++    val lastId = Await.result(eventSourcing.lastEntityId(info.entityKind), 1.second)
+     assertEquals(lastId, Option(idCount))
+ 
+     val db = client.getAutoCommitClientConnection
+     try {
+-      val counts = (1 to idCount).map(id => id -> db.run(RawEventEnvelope.select.filter(_.entityId === id)).size)
++      val counts = (1 to idCount).map(id => id -> db.run(DBRawEventEnvelope.select.filter(_.entityId === id)).size)
+       val bad    = counts.filter(_._2 != incrementsPerId)
+       assert(bad.isEmpty, s"expected every id to have exactly $incrementsPerId persisted events, but got: $bad")
+     } finally db.close()
+-- 
+2.43.0
+
