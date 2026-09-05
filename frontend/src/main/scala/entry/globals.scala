@@ -26,6 +26,7 @@ import urldsl.language.dummyErrorImpl.*
   println(baseStr)
   println(base.createPath())
 
+  given castor.Context      = castor.Context.Simple.global
   given HttpClient          = HttpClient(None)
   given ImagesService       = ImagesService(None) // todo: the None will depend on where we are...
   given CommandBridgeClient = CommandBridgeClient()

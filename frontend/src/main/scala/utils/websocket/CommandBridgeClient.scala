@@ -2,6 +2,7 @@ package utils.websocket
 
 import castorwire.{Bridge, CommandFrame, WireMessage}
 import com.raquo.laminar.api.L.unsafeWindowOwner
+import eventsourcing.EntityKind
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder}
 import org.scalajs.dom
@@ -9,22 +10,23 @@ import org.scalajs.dom
 import scala.concurrent.{ExecutionContext, Future, Promise}
 
 /** Frontend side of `castorwire`: opens the one shared `/ws/commands` connection (see
-  * `be.doeraene.routes.CommandRoutes` server-side) and exposes an `ask`-style call that
-  * mirrors `be.doeraene.utils.castorutils.ask`, used server-side, so a command reads the
-  * same way on both ends -- e.g.:
+  * `be.doeraene.routes.CommandRoutes` server-side).
+  *
+  * The main entry point is [[entity]]: it hands back a plain `castor.Actor[Command]` that
+  * ships every command sent to it over this connection, so code that talks to it (e.g. via
+  * `be.doeraene.utils.castorutils.ask`, also usable here since it's cross-compiled) can't
+  * tell it apart from a real in-process entity actor -- e.g.:
   * {{{
   *   given Codec[Movie.Command] = Movie.Command.codec(using commandBridge.bridge)
-  *   commandBridge.ask("data.movie.Movie", movieId.value)(Movie.Command.ChangeName(newName, _))
+  *   val movie = commandBridge.entity(movieId.value, Movie.entityInfo.entityKind)
+  *   movie.ask(Movie.Command.ChangeName(newName, _))
   * }}}
   * No wire-only DTOs are involved: `Movie.Command` (from `common`) is sent and decoded as
   * itself on both sides, `replyTo` included -- see `castorwire.Bridge.bridgedCodec` for how.
   *
-  * One instance is meant to live for the whole page, like `HttpClient`/`MoviesService`; it
-  * uses Laminar's `unsafeWindowOwner` for that reason, not a component's own owner.
+  * One instance is meant to live for the whole page, like `HttpClient`/`MoviesService`.
   */
-final class CommandBridgeClient(host: String = dom.document.location.host)(using ExecutionContext) {
-
-  given ctx: castor.Context = castor.Context.Simple.global
+final class CommandBridgeClient(host: String = dom.document.location.host)(using ec: ExecutionContext, ctx: castor.Context) {
 
   private val socket = {
     import urldsl.language.dummyErrorImpl.*
@@ -33,7 +35,7 @@ final class CommandBridgeClient(host: String = dom.document.location.host)(using
 
   /** Exposed so callers can build a bridge-aware codec for their own Command ADT, e.g.
     * `given Codec[Movie.Command] = Movie.Command.codec(using commandBridge.bridge)` --
-    * see `MoviesService.updateNameWs` (frontend) for a full example.
+    * see `MoviesService` (frontend) for a full example.
     */
   val bridge: Bridge = Bridge(socket.outWriter.onNext)
 
@@ -49,9 +51,26 @@ final class CommandBridgeClient(host: String = dom.document.location.host)(using
 
   def close(): Unit = socket.close()
 
-  /** Sends the command built by `mkCommand` to entity `entityId` of kind `entityKind`
-    * (matches `EntityInformation.entityKind.name` server-side, e.g. `"data.movie.Movie"`),
-    * and completes once that entity actually replies.
+  private def sendCommand[Command](entityKind: String, entityId: Int, command: Command)(using
+      enc: Encoder[Command]
+  ): Unit =
+    socket.outWriter.onNext(WireMessage.Command(CommandFrame(entityKind, entityId, enc(command))))
+
+  /** A `castor.Actor[Command]` that ships every command sent to it over this connection, to
+    * entity `id` of kind `kind` (matches `EntityInformation.entityKind` server-side -- e.g.
+    * `Movie.entityInfo.entityKind`, so there's no separate wire-only identifier to keep in
+    * sync). Fully opaque to callers: nothing distinguishes it from a real in-process entity
+    * actor, so the usual `castor.Actor[T].ask` extension works on it unchanged.
+    */
+  def entity[Command](id: Int, kind: EntityKind[Command, ?])(using Encoder[Command]): castor.Actor[Command] =
+    new castor.SimpleActor[Command]()(using ctx) {
+      def run(command: Command): Unit = sendCommand(kind.name, id, command)
+    }
+
+  /** Lower-level than [[entity]]: sends one command and resolves a `Future` off a
+    * throwaway, one-shot replyTo actor, without needing an entity handle first. Kept for
+    * one-off calls; prefer `entity(...).ask(...)` when you're calling the same entity more
+    * than once.
     */
   def ask[Command, R](entityKind: String, entityId: Int)(mkCommand: castor.Actor[R] => Command)(using
       Encoder[Command],
@@ -61,8 +80,7 @@ final class CommandBridgeClient(host: String = dom.document.location.host)(using
     val replyTo = new castor.SimpleActor[R]() {
       def run(r: R): Unit = promise.trySuccess(r)
     }
-    val commandJson = mkCommand(replyTo).asJson
-    socket.outWriter.onNext(WireMessage.Command(CommandFrame(entityKind, entityId, commandJson)))
+    sendCommand(entityKind, entityId, mkCommand(replyTo))
     promise.future
   }
 
