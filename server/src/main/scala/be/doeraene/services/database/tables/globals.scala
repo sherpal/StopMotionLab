@@ -36,3 +36,16 @@ object Image extends SimpleTable[Image]
 
 case class MovieToImage(movieId: Int, imageUUID: java.util.UUID, imageIndexInMovie: Option[Int])
 object MovieToImage extends SimpleTable[MovieToImage]
+
+case class RawEventEnvelope(
+    offset: Int,
+    entityId: Int,
+    sequenceNumber: Int,
+    eventPayload: String,
+    entityKind: String,
+    timestamp: Long
+)
+object RawEventEnvelope extends SimpleTable[RawEventEnvelope]
+
+case class ProjectionCheckpoint(projectionName: String, lastOffset: Int, updatedAt: Long)
+object ProjectionCheckpoint extends SimpleTable[ProjectionCheckpoint]

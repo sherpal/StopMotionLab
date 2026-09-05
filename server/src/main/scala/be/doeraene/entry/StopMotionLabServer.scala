@@ -18,7 +18,12 @@ import scala.util.chaining.*
 object StopMotionLabServer extends cask.MainRoutes {
 
   given DatabaseService      = DatabaseService(Paths.get("./data/db"))
-  given EventSourcingService = EventSourcingService(EventSourcingService.Config.default, summon[DatabaseService].client)
+  given EventSourcingService =
+    EventSourcingService(
+      EventSourcingService.Config.default,
+      eventsourcing.SqlEventStore(summon[DatabaseService].client),
+      eventsourcing.CastorScheduler()
+    )
   given FileStorageService   = FileStorageService(Paths.get("./data/storage"))
   given ImagesService        = ImagesService()
   given MoviesService        = MoviesService()

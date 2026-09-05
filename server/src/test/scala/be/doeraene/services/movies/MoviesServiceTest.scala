@@ -29,7 +29,12 @@ class MoviesServiceTest extends munit.FunSuite with HasTestPower {
           }
         }
         given eventSourcingService: EventSourcingService =
-          EventSourcingService(EventSourcingService.Config.default, databaseService.client, isInTest = true)
+          EventSourcingService(
+            EventSourcingService.Config.default,
+            eventsourcing.SqlEventStore(databaseService.client),
+            eventsourcing.CastorScheduler(),
+            isInTest = true
+          )
         (MoviesService(), eventSourcingService, ac, databaseService)
       },
       teardown = { (movies, eventSourcing, ac, db) =>

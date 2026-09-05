@@ -1,25 +1,26 @@
 package eventsourcing
 
 import be.doeraene.utils.testshenanigans.OnlyInTest
-import scalasql.simple.SqliteDialect
 
-import java.time.temporal.{ChronoUnit, TemporalUnit}
 import java.util.concurrent.atomic.AtomicReference
+import scala.concurrent.Future
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 class EventSourcingService(
     config: EventSourcingService.Config,
-    client: scalasql.DbClient.DataSource,
+    eventStore: EventStore,
+    scheduler: Scheduler,
     isInTest: Boolean = false
 )(using
     castor.Context
 ) {
-  import SqliteDialect.*
-
-  private val db = client.getAutoCommitClientConnection
 
   private val supervisor =
-    Supervisor(db, config = config.copy(removeIdleEntities = !isInTest && config.removeIdleEntities))
+    Supervisor(
+      eventStore,
+      scheduler,
+      config = config.copy(removeIdleEntities = !isInTest && config.removeIdleEntities)
+    )
 
   def entity[Command, Event, State](id: Int, info: EntityInformation[Command, Event, State]): castor.Actor[Command] =
     case class Entity(id: Int, kind: EntityKind[Command, ?])
@@ -38,10 +39,8 @@ class EventSourcingService(
     * @param entityKind
     *   kind of entity for which you want the last id.
     */
-  def lastEntityId(entityKind: EntityKind[?, ?]): Option[Int] =
-    db.run(RawEventEnvelope.select.filter(_.entityKind === entityKind.name).sortBy(_.entityId).desc.take(1))
-      .headOption
-      .map(_.entityId)
+  def lastEntityId(entityKind: EntityKind[?, ?]): Future[Option[Int]] =
+    eventStore.lastEntityId(entityKind.name)
 
   /** Registers a [[Projection]] against the events of one entity kind and starts it running immediately. If the log
     * already has events for that kind, they are delivered first, in order, exactly as if they were happening live —
@@ -58,7 +57,9 @@ class EventSourcingService(
     val registeredProjections = registeredProjectionsRef.getAndUpdate(prev => prev + projection.name)
     if registeredProjections.contains(projection.name) then
       throw IllegalArgumentException(s"Projection with name ${projection.name} is already registered")
-    ProjectionRunner.ProjectionHandle(ProjectionRunner(db, entityInfo, projection, pollInterval, autoPoll = !isInTest))
+    ProjectionRunner.ProjectionHandle(
+      ProjectionRunner(eventStore, scheduler, entityInfo, projection, pollInterval, autoPoll = !isInTest)
+    )
   }
 
   private[eventsourcing] def cleanRegisteredProjection(name: String)(using OnlyInTest): Unit =
@@ -68,7 +69,7 @@ class EventSourcingService(
   private[eventsourcing] def clearMemory()(using OnlyInTest): Unit =
     supervisor.send(Supervisor.ClearMemory())
 
-  private[eventsourcing] def closeDb()(using OnlyInTest): Unit = db.close()
+  private[eventsourcing] def closeDb()(using OnlyInTest): Unit = eventStore.close()
 
   private val registeredProjectionsRef = AtomicReference[Set[String]](Set.empty)
 

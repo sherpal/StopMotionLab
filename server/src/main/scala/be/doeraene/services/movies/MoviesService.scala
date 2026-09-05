@@ -19,28 +19,7 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
 
   private def now(): Long = System.currentTimeMillis() / 1000
 
-  private val entityInfo = EntityInformation.usingCirceSerialization[Movie.Command, Movie.Event, Movie](
-    Movie(Movie.Id.dummy, "Untitled", Vector.empty, createdAt = 0L, deletedAt = 0L),
-    _(_),
-    (command, state, id) =>
-      command match {
-        case Movie.Command.Create(replyTo) =>
-          if state.created then
-            // already created, tell them and don't do anything
-            Effect.Ignore().thenReply(replyTo)(_ => Option.empty)
-          else Effect.Persist(Movie.Event.Created(Movie.Id(id), now())).thenReply(replyTo)(Some(_))
-        case Movie.Command.ChangeName(newName, replyTo) =>
-          if state.active then Effect.Persist(Movie.Event.NameChanged(newName)).thenReply(replyTo)(_ => true)
-          else Effect.Ignore().thenReply(replyTo)(_ => false)
-        case Movie.Command.Get(replyTo) =>
-          Effect.ReplyTo(replyTo, movie => Option.when(movie.active)(movie))
-        case Movie.Command.Delete(replyTo) =>
-          if state.active then Effect.Persist(Movie.Event.Deleted(now())).thenReply(replyTo)(_ => true)
-          else Effect.ReplyTo(replyTo, _ => false)
-        case Movie.Command.RawGet(replyTo) =>
-          Effect.ReplyTo(replyTo, identity)
-      }
-  )
+  private val entityInfo = Movie.entityInfo
 
   private def movieEntity(id: Movie.Id) = eventSourcing.entity(id.value, entityInfo)
 
@@ -106,11 +85,11 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
         case None        => attempt()
         case Some(movie) => promise.success(movie.id)
       }
-      def attempt(): Unit = {
-        val idAttempt  = eventSourcing.lastEntityId(entityInfo.entityKind).getOrElse(-1) + 1
-        val movieActor = eventSourcing.entity(idAttempt, entityInfo)
-        movieActor.send(Movie.Command.Create(this))
-      }
+      def attempt(): Unit =
+        eventSourcing.lastEntityId(entityInfo.entityKind).foreach { last =>
+          val movieActor = eventSourcing.entity(last.getOrElse(-1) + 1, entityInfo)
+          movieActor.send(Movie.Command.Create(this))
+        }
     }
 
     MovieCreator(java.util.UUID.randomUUID()).attempt()

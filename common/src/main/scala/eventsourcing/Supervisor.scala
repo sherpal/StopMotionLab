@@ -1,11 +1,8 @@
 package eventsourcing
 
-import scalasql.simple.DbApi
-
-import java.time.temporal.ChronoUnit
-
 private[eventsourcing] class Supervisor(
-    db: DbApi,
+    eventStore: EventStore,
+    scheduler: Scheduler,
     config: EventSourcingService.Config
 )(using castor.Context)
     extends castor.StateMachineActor[Supervisor.SupervisorMessage] {
@@ -23,7 +20,7 @@ private[eventsourcing] class Supervisor(
                 EventSourcedActor(
                   id,
                   entityInfo,
-                  db,
+                  eventStore,
                   config,
                   castor.ProxyActor[EntityIsNowPassive, SupervisorMessage](identity, this)
                 )
@@ -87,12 +84,8 @@ private[eventsourcing] class Supervisor(
 
   override def initialState: State = TheState(Map.empty)
 
-  private def scheduleCheckIdleEntities(): Unit = summon[castor.Context]
-    .scheduleMsg(
-      this,
-      Supervisor.CheckIdleEntities(),
-      java.time.Duration.of(config.entityIdleShutdownTime.toMillis / 2, ChronoUnit.MILLIS)
-    )
+  private def scheduleCheckIdleEntities(): Unit =
+    scheduler.scheduleOnce(config.entityIdleShutdownTime / 2)(() => send(Supervisor.CheckIdleEntities()))
 
   if config.removeIdleEntities then {
     println(s"Launching idle entities routine.")

@@ -1,6 +1,7 @@
 package eventsourcing
 
 import be.doeraene.services.database.DatabaseService
+import be.doeraene.services.database.tables.{RawEventEnvelope as DBRawEventEnvelope}
 import be.doeraene.utils.testshenanigans.HasTestPower
 import castor.Context
 import eventsourcing.EventSourcingService.Config
@@ -56,7 +57,7 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
         val databaseService           = DatabaseService(Paths.get("./test-data/event-sourcing"), inTest = true)
         given ac: castor.Context.Test = castor.Context.Test()
         (
-          EventSourcingService(config, databaseService.client, isInTest = true),
+          EventSourcingService(config, SqlEventStore(databaseService.client), CastorScheduler(), isInTest = true),
           databaseService.client,
           ac
         )
@@ -104,12 +105,12 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
     ac.waitForInactivity()
     assertEquals(response, 102)
 
-    assertEquals(eventSourcing.lastEntityId(info.entityKind), Option(1))
+    assertEquals(Await.result(eventSourcing.lastEntityId(info.entityKind), 1.second), Option(1))
 
     val db = client.getAutoCommitClientConnection
     try {
       val events: Vector[EventEnvelope[Event, Entity]] =
-        db.run(RawEventEnvelope.select).toVector.map(info.decodeEnvelope)
+        db.run(DBRawEventEnvelope.select).toVector.map(SqlEventStore.toCommon).map(info.decodeEnvelope)
       assertEquals(events.map(_.event), Vector.fill(102)(Event()))
     } finally {
       db.close()
@@ -197,7 +198,7 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
       val db = client.getAutoCommitClientConnection
       try {
         val events: Vector[EventEnvelope[Event, Entity]] =
-          db.run(RawEventEnvelope.select).toVector.map(info.decodeEnvelope)
+          db.run(DBRawEventEnvelope.select).toVector.map(SqlEventStore.toCommon).map(info.decodeEnvelope)
         assertEquals(events.count(_.entityId == 1), 4)
         assertEquals(events.count(_.entityId == 2), 2)
       } finally {
@@ -249,7 +250,7 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
 
     val db = client.getAutoCommitClientConnection
     try {
-      val events = db.run(RawEventEnvelope.select).toVector.map(info.decodeEnvelope)
+      val events = db.run(DBRawEventEnvelope.select).toVector.map(SqlEventStore.toCommon).map(info.decodeEnvelope)
       assertEquals(events.count(_.entityId == 1), 7)
     } finally db.close()
   }
@@ -296,7 +297,7 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
 
       val db = client.getAutoCommitClientConnection
       try {
-        val rows = db.run(RawEventEnvelope.select).toVector
+        val rows = db.run(DBRawEventEnvelope.select).toVector
         assertEquals(rows.count(_.entityKind == basicEntityInfo.entityKind.name), 1)
         assertEquals(rows.count(_.entityKind == otherEntityInfo.entityKind.name), 2)
       } finally db.close()
@@ -325,7 +326,7 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
     assertEquals(response, 0)
 
     val db = client.getAutoCommitClientConnection
-    try assertEquals(db.run(RawEventEnvelope.select).toVector, Vector.empty)
+    try assertEquals(db.run(DBRawEventEnvelope.select).toVector, Vector.empty)
     finally db.close()
   }
 
@@ -374,9 +375,9 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
     val db = client.getAutoCommitClientConnection
     try {
       db.run(
-        RawEventEnvelope.insert
+        DBRawEventEnvelope.insert
           .values(
-            RawEventEnvelope(
+            DBRawEventEnvelope(
               offset = 0,
               entityId = 1,
               sequenceNumber = 1,
@@ -434,12 +435,12 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
     }
     ac.waitForInactivity()
 
-    val lastId = eventSourcing.lastEntityId(info.entityKind)
+    val lastId = Await.result(eventSourcing.lastEntityId(info.entityKind), 1.second)
     assertEquals(lastId, Option(idCount))
 
     val db = client.getAutoCommitClientConnection
     try {
-      val counts = (1 to idCount).map(id => id -> db.run(RawEventEnvelope.select.filter(_.entityId === id)).size)
+      val counts = (1 to idCount).map(id => id -> db.run(DBRawEventEnvelope.select.filter(_.entityId === id)).size)
       val bad    = counts.filter(_._2 != incrementsPerId)
       assert(bad.isEmpty, s"expected every id to have exactly $incrementsPerId persisted events, but got: $bad")
     } finally db.close()
