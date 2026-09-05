@@ -1,7 +1,7 @@
 package eventsourcing
 
 import be.doeraene.services.database.DatabaseService
-import be.doeraene.services.database.tables.{RawEventEnvelope as DBRawEventEnvelope}
+import be.doeraene.services.database.tables.RawEventEnvelope as DBRawEventEnvelope
 import be.doeraene.utils.testshenanigans.HasTestPower
 import castor.Context
 import eventsourcing.EventSourcingService.Config
@@ -87,6 +87,22 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
     )
     val entity = eventSourcing.entity[Command, Event, Entity](1, info)
 
+    var upToDateState = info.initialState
+
+    val entitySubscription = eventSourcing.subscribe(
+      1,
+      info.entityKind,
+      new castor.SimpleActor[EntityUpdateNotification[Entity]]() {
+        var maxSequenceNumberSeen = -1
+
+        override def run(msg: EntityUpdateNotification[BasicEntityDefs.Entity]): Unit =
+          if msg.sequenceNumber > maxSequenceNumberSeen then {
+            maxSequenceNumberSeen = msg.sequenceNumber
+            upToDateState = msg.state
+          }
+      }
+    )
+
     entity.send(Increment())
     entity.send(Get())
     ac.waitForInactivity()
@@ -95,6 +111,10 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
     entity.send(Get())
     ac.waitForInactivity()
     assertEquals(response, 2)
+    assertEquals(upToDateState.count, response)
+
+    // stop subscribing
+    entitySubscription.unsubscribe()
 
     for (j <- 1 to 100) do {
       Future(entity.send(Increment()))
@@ -104,6 +124,7 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
     entity.send(Get())
     ac.waitForInactivity()
     assertEquals(response, 102)
+    assertEquals(upToDateState.count, 2)
 
     assertEquals(Await.result(eventSourcing.lastEntityId(info.entityKind), 1.second), Option(1))
 

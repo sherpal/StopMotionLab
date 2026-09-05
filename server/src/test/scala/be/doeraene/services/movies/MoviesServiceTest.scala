@@ -121,38 +121,41 @@ class MoviesServiceTest extends munit.FunSuite with HasTestPower {
     assertEquals(movies.moviesMetadata.length, 10)
   }
 
-  fixture.test("I can send a Movie command through the castorwire bridge and get the reply back") { (movies, _, ac, _) =>
-    given castor.Context = ac
+  fixture.test("I can send a Movie command through the castorwire bridge and get the reply back") {
+    (movies, _, ac, _) =>
+      given castor.Context = ac
 
-    val id = movies.create()
+      val id = movies.create()
 
-    // stand-in for "the frontend": a promise that resolves once the entity actually replies.
-    val promise = Promise[Boolean]()
-    val replyTo = new castor.SimpleActor[Boolean]() {
-      def run(msg: Boolean): Unit = promise.trySuccess(msg)
-    }
+      // stand-in for "the frontend": a promise that resolves once the entity actually replies.
+      val promise = Promise[Boolean]()
+      val replyTo = new castor.SimpleActor[Boolean]() {
+        def run(msg: Boolean): Unit = promise.trySuccess(msg)
+      }
 
-    // two bridges wired directly to each other, standing in for the two ends of one
-    // websocket connection (see be.doeraene.routes.CommandRoutes for the real thing).
-    var clientBridge: Bridge = null
-    val serverBridge: Bridge = Bridge {
-      case WireMessage.Reply(token, payload) => clientBridge.deliver(token, payload)
-      case WireMessage.Command(_)            => () // the server never pushes commands to the client in this test
-    }
-    clientBridge = Bridge(_ => ()) // the client never gets sent a Command frame here either
+      // two bridges wired directly to each other, standing in for the two ends of one
+      // websocket connection (see be.doeraene.routes.CommandRoutes for the real thing).
+      var clientBridge: Bridge = null
+      val serverBridge: Bridge = Bridge {
+        case WireMessage.Reply(token, payload) => clientBridge.deliver(token, payload)
+        case WireMessage.Subscribe(_, _, _)    => () // not tested here
+        case WireMessage.UnSubscribe(_)        => () // not tested here
+        case WireMessage.Command(_)            => () // the server never pushes commands to the client in this test
+      }
+      clientBridge = Bridge(_ => ()) // the client never gets sent a Command frame here either
 
-    // the client encodes a real Movie.Command, containing a *real* local replyTo actor
-    val commandJson =
-      (Movie.Command.ChangeName("new name via wire", replyTo): Movie.Command)
-        .asJson(using Movie.Command.codec(using clientBridge))
+      // the client encodes a real Movie.Command, containing a *real* local replyTo actor
+      val commandJson =
+        (Movie.Command.ChangeName("new name via wire", replyTo): Movie.Command)
+          .asJson(using Movie.Command.codec(using clientBridge))
 
-    // ... and only that JSON (plus the entity id) crosses into "the server", exactly as
-    // be.doeraene.routes.CommandRoutes would receive it as a WireMessage.Command(frame).
-    movies.commandRouter.dispatch(id.value, commandJson, serverBridge)
+      // ... and only that JSON (plus the entity id) crosses into "the server", exactly as
+      // be.doeraene.routes.CommandRoutes would receive it as a WireMessage.Command(frame).
+      movies.commandRouter.dispatch(id.value, commandJson, serverBridge)
 
-    val changed = Await.result(promise.future, Duration(2, "s"))
-    assert(changed)
-    assertEquals(movies.movie(id).map(_.name), Some("new name via wire"))
+      val changed = Await.result(promise.future, Duration(2, "s"))
+      assert(changed)
+      assertEquals(movies.movie(id).map(_.name), Some("new name via wire"))
   }
 
 }

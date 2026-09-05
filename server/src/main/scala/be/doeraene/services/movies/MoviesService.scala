@@ -9,7 +9,7 @@ import be.doeraene.utils.castorutils.ask
 import data.movie.Movie.Event
 import be.doeraene.services.database.tables.Movie as DBMovie
 import be.doeraene.utils.testshenanigans.OnlyInTest
-import io.circe.Json
+import io.circe.{Encoder, Json}
 import scalasql.simple.SqliteDialect
 
 import scala.concurrent.duration.Duration
@@ -36,6 +36,11 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
         case Right(command) => movieEntity(Movie.Id(entityId)).send(command)
         case Left(err)      => System.err.println(s"Failed to decode Movie.Command: $err")
       }
+
+    override def subscribe(entityId: Int, actorToken: String, bridge: Bridge): () => Unit = {
+      val sub = eventSourcing.subscribe(entityId, entityInfo.entityKind, bridge.remoteProxy(actorToken))
+      () => sub.unsubscribe()
+    }
   }
 
   private val movieProjection: Projection[Movie.Event] = Projection(

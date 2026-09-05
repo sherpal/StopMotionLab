@@ -1,8 +1,9 @@
 package eventsourcing
 
 import be.doeraene.utils.testshenanigans.OnlyInTest
+import eventsourcing.EventSourcingService.Subscription
 
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 import scala.concurrent.Future
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
@@ -29,6 +30,18 @@ class EventSourcingService(
           supervisor
         )
     Entity(id, info.entityKind)
+
+  private val subscriptionCount = AtomicInteger()
+
+  def subscribe[State](
+      id: Int,
+      entityKind: EntityKind[?, State],
+      replyTo: castor.Actor[EntityUpdateNotification[State]]
+  )(using tp: scala.reflect.Typeable[State]): Subscription = {
+    val subscriptionName = s"subscription-${subscriptionCount.getAndIncrement()}"
+    supervisor.send(Supervisor.Subscribe(subscriptionName, id, entityKind, replyTo, tp))
+    Subscription(() => supervisor.send(Supervisor.Unsubscribe(id, entityKind, subscriptionName)))
+  }
 
   /** Returns the biggest entity id for which an event has been registered.
     *
@@ -87,5 +100,14 @@ object EventSourcingService {
 
   object Config:
     def default: Config = Config()
+
+  opaque type Subscription = () => Unit
+  object Subscription {
+    extension (sub: Subscription) {
+      inline def unsubscribe(): Unit = sub()
+    }
+
+    private[EventSourcingService] def apply(unsub: () => Unit): Subscription = unsub
+  }
 
 }

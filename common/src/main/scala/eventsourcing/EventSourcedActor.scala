@@ -11,7 +11,7 @@ private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
     entityInfo: EntityInformation[Command, Event, EntityState],
     eventStore: EventStore,
     config: EventSourcingService.Config,
-    supervisor: castor.Actor[Supervisor.EntityIsNowPassive]
+    supervisor: castor.Actor[Supervisor.FromEventSourcedActor]
 )(using castor.Context)
     extends castor.StateMachineActor[ActorCommand[Command]] {
 
@@ -24,7 +24,7 @@ private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
       lastSequenceNumber: Int,
       currentState: EntityState,
       effect: Effect[Event, EntityState]
-  ): Future[(Int, EntityState)] = effect match {
+  ): Future[(sequenceNumber: Int, state: EntityState)] = effect match {
     case Effect.Persist(event) =>
       handleEffect(lastSequenceNumber, currentState, Effect.PersistMultiple(Vector(event)))
     case Effect.PersistMultiple(events) =>
@@ -37,14 +37,19 @@ private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
           EventEnvelope[Event, EntityState](id, sequenceNumber, event, System.currentTimeMillis() / 1000)
         )
       eventStore.appendEnvelopes(envelopes.map(encodeEnvelope)).map { _ =>
-        (envelopes.map(_.sequenceNumber).maxOption.getOrElse(lastSequenceNumber), nextState)
+        val resolved =
+          (sequenceNumber = envelopes.map(_.sequenceNumber).maxOption.getOrElse(lastSequenceNumber), state = nextState)
+        supervisor.send(
+          Supervisor.EntityUpdate(id, entityInfo.entityKind.name, resolved.state, resolved.sequenceNumber)
+        )
+        resolved
       }
     case Effect.WithSideEffect(effect, sideEffect) =>
       handleEffect(lastSequenceNumber, currentState, effect).map { resolved =>
-        sideEffect(resolved._2)
+        sideEffect(resolved.state)
         resolved
       }
-    case Effect.Ignore()                  => Future.successful((lastSequenceNumber, currentState))
+    case Effect.Ignore() => Future.successful((sequenceNumber = lastSequenceNumber, state = currentState))
     case Effect.ReplyTo(replyTo, message) =>
       handleEffect(lastSequenceNumber, currentState, Effect.Ignore().thenReply(replyTo)(message))
   }
