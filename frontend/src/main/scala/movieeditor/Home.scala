@@ -3,7 +3,7 @@ package movieeditor
 import com.raquo.laminar.api.L.*
 import be.doeraene.webcomponents.ui5.*
 import be.doeraene.webcomponents.ui5.configkeys.IconName
-import components.MovieList
+import components.{MovieList, Router, base}
 import data.movie.{Movie, MovieMetadata}
 import services.{ImagesService, MoviesService}
 
@@ -29,9 +29,11 @@ object Home {
       EventStream.fromFuture(moviesService.movies) --> moviesVar.writer,
       createMovieBus.events
         .flatMapSwitch(_ => EventStream.fromFuture(moviesService.create()))
-        .flatMapSwitch(_ => EventStream.fromFuture(moviesService.movies)) --> moviesVar.writer,
+        .map(id => (base / entry.DefinedRoutes.movieEditorPath).createPath(id)) --> Observer[String](path =>
+        Router.router.moveTo("/" ++ path)
+      ),
       deleteMovieBus.events
-        .flatMapSwitch(movieId => EventStream.fromFuture(moviesService.delete(movieId)))
+        .flatMapSwitch(movieId => EventStream.fromFuture(moviesService.deleteWithRetries(movieId)))
         .flatMapSwitch(_ => EventStream.fromFuture(moviesService.movies)) --> moviesVar.writer
     )
 

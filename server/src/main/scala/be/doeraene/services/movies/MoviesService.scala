@@ -48,6 +48,11 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
     Projection.Semantics.AtLeastOnce
   ) { (id, envelope) =>
     import SqliteDialect.*
+    def touchUpdateAt(): Unit = {
+      db.db.run(DBMovie.update(_.id === id).set(_.lastUpdateAt := now()))
+      ()
+    }
+
     envelope.event match {
       case event @ Event.Created(id, at) =>
         val movie = event(entityInfo.initialState)
@@ -55,9 +60,15 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
         db.getMovie(movie.id.value).foreach(_ => db.deleteMovie(movie.id))
         db.createMovie(DBMovie(movie.id.value, movie.name, movie.createdAt, now()))
       case Event.NameChanged(newName) =>
-        db.db.run(DBMovie.update(_.id === id).set(_.name := newName))
+        db.db.run(DBMovie.update(_.id === id).set(_.name := newName, _.lastUpdateAt := now()))
       case Event.Deleted(at) =>
         db.deleteMovie(Movie.Id(id))
+      case data.movie.Movie.Event.ImagesRemoved(_) =>
+        touchUpdateAt()
+      case data.movie.Movie.Event.ImagesDuplicated(_) =>
+        touchUpdateAt()
+      case _: Event.RangeMoved =>
+        touchUpdateAt()
     }
   }
 

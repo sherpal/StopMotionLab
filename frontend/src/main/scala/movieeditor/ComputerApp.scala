@@ -6,9 +6,10 @@ import communication.webrtc.WebRTCCommProtocol
 import communication.ComputerMessage
 import data.images.ImageData
 import data.movie.Movie
+import data.movie.Movie.ImageDataWithOrdering
 import org.scalajs.dom
 import org.scalajs.dom.BlobPropertyBag
-import services.{ImagesService, LocalStorageService}
+import services.{ImagesService, LocalStorageService, MoviesService}
 import utils.websocket.JsonWebSocket
 import urldsl.language.dummyErrorImpl.*
 import utils.webrtc.WebRTCConnection
@@ -20,14 +21,20 @@ import scala.util.{Failure, Success}
 
 object ComputerApp {
 
-  def apply()(using ExecutionContext): HtmlElement = {
-    val storage         = LocalStorageService()
-    val imagesService   = ImagesService(None)
-    given ImagesService = imagesService
+  def apply(
+      movieId: Movie.Id
+  )(using movieService: MoviesService, imagesService: ImagesService)(using ExecutionContext): HtmlElement = {
+    val storage = LocalStorageService()
 
     val websocket = JsonWebSocket[ComputerMessage.ServerToComputerMessage, ComputerMessage.ComputerToServerMessage](
       root / "movieeditor"
     )
+
+    val (updateSubscription, updatesCancellation) = movieService.subscribe(movieId)
+
+    val movieVar: Var[Movie] = Var(Movie.entityInfo.initialState)
+
+    val initiallyLoaded: Signal[Boolean] = movieVar.signal.map(_.id != Movie.Id.dummy)
 
     val currentProviderIdVar = Var(Option.empty[java.util.UUID])
 
@@ -37,16 +44,16 @@ object ComputerApp {
     def movieDisplay = {
       div(
         MovieDisplay(
-          picturesVar.signal.map(
-            _.map(_.split("/").last).map(str => ImageData.Id.fromUUID(java.util.UUID.fromString(str))).map(ImageData(_))
-          ),
-          picturesVar.writer.contramap[Vector[ImageData]](_.map(imagesService.imageUrl))
+          movieId,
+          movieVar.signal
+            .map(_.images.sorted.collect { case ImageDataWithOrdering(imageData, Some(_)) => imageData })
         )
       )
 //      MovieDisplay.testElement()
     }
 
     div(
+      display <-- initiallyLoaded.map(if _ then "block" else "none"),
       "movieeditor",
       onMountBind { ctx =>
         given Owner = ctx.owner
@@ -126,7 +133,9 @@ object ComputerApp {
         ),
         movieDisplay
         // MovieDisplay.testElement()
-      )
+      ),
+      onUnmountCallback(_ => updatesCancellation()),
+      updateSubscription --> movieVar.writer
     )
   }
 

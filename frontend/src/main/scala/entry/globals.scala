@@ -29,7 +29,7 @@ import urldsl.language.dummyErrorImpl.*
   given castor.Context      = castor.Context.Simple.global
   given HttpClient          = HttpClient(None)
   given ImagesService       = ImagesService(None) // todo: the None will depend on where we are...
-  given CommandBridgeClient = CommandBridgeClient()
+  given CommandBridgeClient = CommandBridgeClient()(using unsafeWindowOwner)
   given MoviesService       = MoviesService()
 
   summon[CommandBridgeClient].open()
@@ -43,7 +43,7 @@ import urldsl.language.dummyErrorImpl.*
         .firstOf(
           Route(base / home, _ => Home()),
           Route(base / phonePath, _ => PhoneApp()),
-          Route(base / movieEditorPath, _ => ComputerApp()),
+          Route(base / movieEditorPath, ComputerApp(_)),
           Route(
             base,
             _ =>

@@ -5,17 +5,23 @@ import be.doeraene.webcomponents.ui5.{Button, Dialog, Slider, StepInput}
 import com.raquo.laminar.api.L.*
 import data.images.ImageData
 import com.raquo.laminar.codecs.StringAsIsCodec
+import data.movie.Movie
+import data.movie.Movie.MoveDirection
 import org.scalajs.dom
-import services.ImagesService
+import services.{ImagesService, MoviesService}
 
+import scala.concurrent.ExecutionContext
 import scala.scalajs.js
 
 object MovieDisplay {
 
   /** The goal of this component is to display the work in progress movie.
     */
-  def apply(imagesSignal: Signal[Vector[ImageData]], imagesObserver: Observer[Vector[ImageData]])(using
-      ImagesService
+  def apply(movieId: Movie.Id, imagesSignal: Signal[Vector[ImageData]])(using
+      movieService: MoviesService
+  )(using
+      ImagesService,
+      ExecutionContext
   ): HtmlElement = {
     val selectedIndices = Var(Set.empty[Int])
 
@@ -53,7 +59,7 @@ object MovieDisplay {
     }
 
     div(
-      manipulateSelectionComponent(selectedIndices, imagesSignal, imagesObserver),
+      manipulateSelectionComponent(movieId, selectedIndices, imagesSignal),
       div(
         className     := "images-box",
         width.percent := 100,
@@ -210,10 +216,10 @@ object MovieDisplay {
   }
 
   private def manipulateSelectionComponent(
+      movieId: Movie.Id,
       selectedIndicesVar: Var[Set[Int]],
-      imagesSignal: Signal[Vector[ImageData]],
-      imagesObserver: Observer[Vector[ImageData]]
-  ): HtmlElement = {
+      imagesSignal: Signal[Vector[ImageData]]
+  )(using movieService: MoviesService)(using ExecutionContext): HtmlElement = {
     val atLeastOneSelectedSignal = selectedIndicesVar.signal.map(_.nonEmpty)
     val noSelectionSignal        = atLeastOneSelectedSignal.invert
 
@@ -271,9 +277,15 @@ object MovieDisplay {
           .withCurrentValueOf(imagesSignal)
           .map((selected, images) =>
             images.zipWithIndex.collect {
-              case (image, index) if !selected.contains(index) => image
+              case (image, index) if selected.contains(index) => image.id -> index
             }
-          ) --> Observer.combine(imagesObserver, selectedIndicesVar.writer.contramap[Any](_ => Set.empty))
+          )
+          .flatMapSwitch(imageIdsToRemove =>
+            EventStream.fromFuture(
+              movieService.sendCommand(movieId, command = Movie.Command.RemoveImages(imageIdsToRemove, _))
+            )
+          )
+          .collect { case Some(true) => () } --> selectedIndicesVar.writer.contramap[Any](_ => Set.empty)
       )
     }
 
@@ -289,10 +301,10 @@ object MovieDisplay {
         ),
         duplicateSelectedBus.events
           .sample(selectedIndicesVar.signal, imagesSignal)
-          .map((selected, images) =>
-            images.zipWithIndex
-              .flatMap((image, index) => if selected.contains(index) then Vector(image, image) else Vector(image))
-          ) --> imagesObserver
+          .map((selected, images) => images.map(_.id).zipWithIndex)
+          .flatMapSwitch(toDuplicate =>
+            EventStream.fromFuture(movieService.sendCommand(movieId, Movie.Command.DuplicateImages(toDuplicate, _)))
+          ) --> Observer.empty
       )
     }
 
@@ -350,6 +362,15 @@ object MovieDisplay {
               case MoveDirection.Left  => !selected.contains(0)
               case MoveDirection.Right => !selected.contains(images.length - 1)
             }
+          )
+          .flatMapSwitch((move, selected, images) =>
+            EventStream
+              .fromFuture(
+                movieService.sendCommand(movieId, Movie.Command.MoveImageRange(move, selected.min, selected.max, _))
+              )
+              .collect { case Some(true) =>
+                (move, selected, images)
+              }
           ) --> Observer.combine[(MoveDirection, Set[Int], Vector[ImageData])](
           selectedIndicesVar
             .updater((selected, move) =>
@@ -358,19 +379,7 @@ object MovieDisplay {
                 case MoveDirection.Right => selected.map(_ + 1)
               }
             )
-            .contramap(_._1),
-          imagesObserver.contramap((move, selected, images) =>
-            val imagesToMove                    = images.slice(selected.min, selected.max + 1)
-            val (imagesToInsert, indexToInsert) = move match {
-              case MoveDirection.Left =>
-                val index = selected.min - 1
-                (imagesToMove :+ images(index), index)
-              case MoveDirection.Right =>
-                val index = selected.min
-                (images(selected.max) +: imagesToMove, index)
-            }
-            images.patch(indexToInsert, imagesToInsert, imagesToInsert.length)
-          )
+            .contramap(_._1)
         )
       )
     }
@@ -386,9 +395,6 @@ object MovieDisplay {
 
   private enum ClickModifier:
     case Shift, Control
-
-  private enum MoveDirection:
-    case Left, Right
 
 //  def testElement(): HtmlElement = {
 //    val images = Var((0 until 20).toVector.map(utils.createTestImage(_, 20)).map(ImageData(_)))

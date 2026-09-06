@@ -25,9 +25,9 @@ import scala.concurrent.{ExecutionContext, Future, Promise}
   *
   * One instance is meant to live for the whole page, like `HttpClient`/`MoviesService`.
   */
-final class CommandBridgeClient(host: String = dom.document.location.host)(using
-    ec: ExecutionContext,
-    ctx: castor.Context
+final class CommandBridgeClient(host: String = dom.document.location.host)(using Owner)(using
+    ExecutionContext,
+    castor.Context
 ) {
 
   private val socket = {
@@ -66,9 +66,10 @@ final class CommandBridgeClient(host: String = dom.document.location.host)(using
     * entity actor, so the usual `castor.Actor[T].ask` extension works on it unchanged.
     */
   def entity[Command](id: Int, kind: EntityKind[Command, ?])(using Encoder[Command]): castor.Actor[Command] =
-    new castor.SimpleActor[Command]()(using ctx) {
+    case class EntityBridgeActor(id: Int, kind: EntityKind[Command, ?]) extends castor.SimpleActor[Command]() {
       def run(command: Command): Unit = sendCommand(kind.name, id, command)
     }
+    EntityBridgeActor(id, kind)
 
   def subscribe[Entity](id: Int, kind: EntityKind[?, Entity])(using
       Decoder[Entity]

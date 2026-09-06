@@ -16,6 +16,14 @@ object MovieList {
             _ =>
               Button.of(
                 _.iconOnly := true,
+                _.icon     := IconName.`open-folder`,
+                _.events.onClick.preventDefault.mapToUnit --> Observer[Unit](_ =>
+                  Router.router.moveTo("/" ++ (base / entry.DefinedRoutes.movieEditorPath).createPath(key))
+                )
+              ),
+            _ =>
+              Button.of(
+                _.iconOnly := true,
                 _.icon     := IconName.delete,
                 _.events.onClick.preventDefault.mapTo(key) --> deleteMovieObserver
               )

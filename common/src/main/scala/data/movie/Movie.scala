@@ -18,6 +18,9 @@ case class Movie(
   def created: Boolean = createdAt > 0L
   def deleted: Boolean = deletedAt > 0L
   def active: Boolean  = created && !deleted
+
+  def containsImage(imageId: ImageData.Id, atIndex: Int): Boolean =
+    images.exists(info => info.imageData.id == imageId && info.maybeIndex.contains[Int](atIndex))
 }
 
 object Movie {
@@ -40,7 +43,13 @@ object Movie {
   given FromString[Id, DummyError] = _.toIntOption.toRight(dummyError)
   given Printer[Id]                = _.toString
 
-  case class ImageDataWithOrdering(imageData: ImageData, maybeIndex: Option[Int]) derives Codec
+  case class ImageDataWithOrdering(imageData: ImageData, maybeIndex: Option[Int]) derives Codec {
+    def mapIndex(mapping: Option[Int] => Option[Int]): ImageDataWithOrdering =
+      copy(maybeIndex = mapping(maybeIndex))
+  }
+  object ImageDataWithOrdering {
+    given Ordering[ImageDataWithOrdering] = Ordering.by(_.maybeIndex)
+  }
 
   enum Command:
     case Create(replyTo: castor.Actor[Option[Movie]])
@@ -48,25 +57,45 @@ object Movie {
     case Get(replyTo: castor.Actor[Option[Movie]])
     case Delete(replyTo: castor.Actor[Boolean])
     case RawGet(replyTo: castor.Actor[Movie])
+    case RemoveImages(toRemove: Vector[(ImageData.Id, Int)], replyTo: castor.Actor[Boolean])
+    case DuplicateImages(toDuplicate: Vector[(ImageData.Id, Int)], replyTo: castor.Actor[Boolean])
+    case MoveImageRange(direction: MoveDirection, minIndex: Int, maxIndex: Int, replyTo: castor.Actor[Boolean])
 
     def handle(state: Movie, id: Int): Effect[Event, Movie] = {
       def now(): Long = System.currentTimeMillis() / 1000
       this match {
-        case Command.Create(replyTo) =>
+        case Create(replyTo) =>
           if state.created then
             // already created, tell them and don't do anything
             Effect.Ignore().thenReply(replyTo)(_ => Option.empty)
           else Effect.Persist(Event.Created(Id(id), now())).thenReply(replyTo)(Some(_))
-        case Command.ChangeName(newName, replyTo) =>
+        case ChangeName(newName, replyTo) =>
           if state.active then Effect.Persist(Event.NameChanged(newName)).thenReply(replyTo)(_ => true)
           else Effect.Ignore().thenReply(replyTo)(_ => false)
-        case Command.Get(replyTo) =>
+        case Get(replyTo) =>
           Effect.ReplyTo(replyTo, movie => Option.when(movie.active)(movie))
-        case Command.Delete(replyTo) =>
+        case Delete(replyTo) =>
           if state.active then Effect.Persist(Event.Deleted(now())).thenReply(replyTo)(_ => true)
           else Effect.ReplyTo(replyTo, _ => false)
-        case Command.RawGet(replyTo) =>
+        case RawGet(replyTo) =>
           Effect.ReplyTo(replyTo, identity)
+        case RemoveImages(toRemove, replyTo) =>
+          if state.active && toRemove.forall(state.containsImage) then
+            Effect.Persist(Event.ImagesRemoved(toRemove)).thenReply(replyTo)(_ => true)
+          else Effect.ReplyTo(replyTo, _ => false)
+        case DuplicateImages(toDuplicate, replyTo) =>
+          if state.active && toDuplicate.forall(state.containsImage) then
+            Effect.Persist(Event.ImagesDuplicated(toDuplicate)).thenReply(replyTo)(_ => true)
+          else Effect.ReplyTo(replyTo, _ => false)
+        case MoveImageRange(direction, minIndex, maxIndex, replyTo) =>
+          if state.active && minIndex >= 0 && minIndex <= maxIndex && state.images
+              .flatMap(_.maybeIndex)
+              .exists(_ >= maxIndex) && (direction match {
+              case MoveDirection.Left  => minIndex > 0
+              case MoveDirection.Right => state.images.flatMap(_.maybeIndex).exists(_ > maxIndex)
+            })
+          then Effect.Persist(Event.RangeMoved(direction, minIndex, maxIndex)).thenReply(replyTo)(_ => true)
+          else Effect.ReplyTo(replyTo, _ => false)
       }
     }
 
@@ -85,6 +114,9 @@ object Movie {
     case Created(id: Id, at: Long)
     case NameChanged(newName: String)
     case Deleted(at: Long)
+    case ImagesRemoved(toRemove: Vector[(ImageData.Id, Int)])
+    case ImagesDuplicated(toDuplicate: Vector[(ImageData.Id, Int)])
+    case RangeMoved(direction: MoveDirection, minIndex: Int, maxIndex: Int)
 
     def apply(movie: Movie): Movie = this match {
       case Created(id, at) =>
@@ -96,6 +128,56 @@ object Movie {
         movie.copy(name = newName)
       case Deleted(at) =>
         movie.copy(deletedAt = at)
+      case ImagesRemoved(toRemove) =>
+        val removedIndices = toRemove.map(_._2)
+
+        val mapMaybeIndex: Option[Int] => Option[Int] = {
+          case None                                          => None
+          case Some(index) if removedIndices.contains(index) => None
+          case Some(index)                                   =>
+            Some(index - removedIndices.count(_ < index))
+        }
+        val imagesModified = movie.images.map(_.mapIndex(mapMaybeIndex))
+        movie.copy(images = imagesModified)
+      case ImagesDuplicated(toDuplicate) =>
+        val (deletedImages, stillThere) = movie.images.partitionMap {
+          case ImageDataWithOrdering(imageData, None)        => Left(imageData)
+          case ImageDataWithOrdering(imageData, Some(index)) => Right(imageData -> index)
+        }
+
+        val toDuplicateSet = toDuplicate.toSet
+
+        val withDuplicated = stillThere
+          .sortBy(_._2)
+          .flatMap((imageData, index) =>
+            if toDuplicateSet.contains((imageData.id, index)) then Vector(imageData, imageData)
+            else Vector(imageData)
+          )
+
+        val newImages = deletedImages.map(ImageDataWithOrdering(_, None)) ++ withDuplicated.zipWithIndex.map(
+          (image, index) => ImageDataWithOrdering(image, Some(index))
+        )
+
+        movie.copy(images = newImages)
+      case RangeMoved(direction, minIndex, maxIndex) =>
+        val indexMapping: Option[Int] => Option[Int] = direction match {
+          case MoveDirection.Left => {
+            case None                                 => None
+            case Some(index) if index == minIndex - 1 => Some(maxIndex)
+            case Some(index) if index > maxIndex      => Some(index)
+            case Some(index) if index < minIndex      => Some(index)
+            case Some(index)                          => Some(index - 1)
+          }
+          case MoveDirection.Right => {
+            case None                                 => None
+            case Some(index) if index == maxIndex + 1 => Some(minIndex)
+            case Some(index) if index < minIndex      => Some(index)
+            case Some(index) if index > maxIndex      => Some(index)
+            case Some(index)                          => Some(index + 1)
+          }
+        }
+
+        movie.copy(images = movie.images.map(_.mapIndex(indexMapping)))
     }
 
   val entityInfo: EntityInformation[Command, Event, Movie] =
@@ -104,5 +186,8 @@ object Movie {
       _(_),
       (command, state, id) => command.handle(state, id)
     )
+
+  enum MoveDirection derives Codec:
+    case Left, Right
 
 }

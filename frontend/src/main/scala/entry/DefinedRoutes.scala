@@ -1,4 +1,5 @@
 package entry
+import data.movie.Movie
 import urldsl.errors.DummyError
 import urldsl.language.PathSegment
 import urldsl.language.dummyErrorImpl.*
@@ -8,7 +9,7 @@ object DefinedRoutes {
 
   val home: Path[Unit] = root / "home"
 
-  val phonePath: Path[Unit]       = root / "phone"
-  val movieEditorPath: Path[Unit] = root / "movie-editor"
+  val phonePath: Path[Unit]           = root / "phone"
+  val movieEditorPath: Path[Movie.Id] = root / "movie-editor" / segment[Movie.Id]
 
 }
