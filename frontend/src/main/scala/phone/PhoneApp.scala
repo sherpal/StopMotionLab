@@ -19,17 +19,19 @@ import scala.util.{Failure, Success}
 object PhoneApp {
 
   def apply(
-  )(using ExecutionContext): HtmlElement = {
+      editorId: String
+  )(using imagesService: ImagesService)(using ExecutionContext): HtmlElement = {
     val websocket =
-      JsonWebSocket[PhoneMessage.ServerToPhoneMessage, PhoneMessage.PhoneToServerMessage](root / "phone")
-
-    val imagesService = ImagesService(None)
+      JsonWebSocket.withPathValue[PhoneMessage.ServerToPhoneMessage, PhoneMessage.PhoneToServerMessage, String](
+        root / "image-provider-connection" / segment[String],
+        editorId
+      )
 
     val videoStreamVar = Var(Option.empty[MediaStream])
 
     val webRTCConnectionsVar = Var(Vector.empty[WebRTCConnection.Provider])
 
-    val takePictureBus = new EventBus[java.util.UUID]
+    val takePictureBus = new EventBus[(String, Movie.Id)]
 
     extension (blob: dom.Blob) {
       def extractDataUrl: Future[String] = {
@@ -50,11 +52,11 @@ object PhoneApp {
     div(
       "phone",
 
-      websocket.inEvents.collect { case PhoneMessage.ComputerAskedPicture(computerId) =>
-        computerId
+      websocket.inEvents.collect { case PhoneMessage.ComputerAskedPicture(computerId, movieId) =>
+        computerId -> movieId
       } --> takePictureBus.writer,
       takePictureBus.events
-        .flatMapSwitch { computerId =>
+        .flatMapSwitch { (computerId, movieId) =>
           EventStream.fromFuture(for {
             stream <- dom.window.navigator.mediaDevices
               .getUserMedia(new MediaStreamConstraints {
@@ -64,7 +66,7 @@ object PhoneApp {
             track        = stream.getVideoTracks().head
             imageCapture = ImageCapture(track)
             blob <- imageCapture.takePhoto().toFuture
-            _    <- imagesService.postImage(Movie.Id.dummy, computerId, blob) // todo: movie id
+            _    <- imagesService.postImage(movieId, computerId, blob)
           } yield ())
         } --> Observer.empty,
 

@@ -25,7 +25,7 @@ object Movie extends SimpleTable[Movie] {
   }
 }
 
-case class Image(uuid: java.util.UUID, contentType: ImageData.MimeType, image: Array[Byte]):
+case class Image(uuid: java.util.UUID, contentType: ImageData.MimeType, image: Array[Byte], lastUpdateAt: Long):
   override def equals(obj: Any): Boolean = obj match {
     case that: Image =>
       this.uuid == that.uuid && this.contentType == that.contentType && this.image.length == that.image.length && this.image.indices

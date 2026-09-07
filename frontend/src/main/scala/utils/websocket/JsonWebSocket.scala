@@ -110,6 +110,15 @@ object JsonWebSocket {
       Encoder[Out]
   )(using ExecutionContext): JsonWebSocket[In, Out, Unit, Unit] = new JsonWebSocket(path ? ignore, (), (), host)
 
+  /** Same idea as `apply`, but for a path segment carrying a value (e.g. a `:editorId`-style segment), so the
+    * resulting URL matches a cask route that takes a path parameter. Named differently from `apply` because an
+    * overload sharing its arity/erasure with a default-having `apply` overload confuses Scala's overload resolution.
+    */
+  def withPathValue[In, Out, P](path: PathSegment[P, ?], p: P, host: String = dom.document.location.host)(using
+      Decoder[In],
+      Encoder[Out]
+  )(using ExecutionContext): JsonWebSocket[In, Out, P, Unit] = new JsonWebSocket(path ? ignore, p, (), host)
+
   def apply[In, Out, Q](
       path: PathSegment[Unit, ?],
       query: QueryParameters[Q, ?],

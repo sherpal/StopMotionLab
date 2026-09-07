@@ -20,12 +20,29 @@ class ConnectedClientsService(using castor.Context, cask.util.Logger) {
     ConnectedClientsService.ImageProviderClientInfo
   ]] = AtomicReference(Map.empty)
 
+  private def newConnection(
+      movieId: Movie.Id,
+      rawChannel: cask.WsChannelActor
+  ): ConnectedClientsService.MovieEditorClientInfo =
+    synchronized {
+      val currentIds: Set[Int] = movieEditors.get.keySet.map(_.value.split("-").last.toInt)
+      val nextId               = currentIds.maxOption match {
+        case None      => 1
+        case Some(max) => (1 to max).find(!currentIds.contains(_)).getOrElse(max + 1)
+      }
+      val editorId = ConnectedClientsService.Ids.MovieEditorClientId.fromValue(s"editor-$nextId")
+      val editor   = ConnectedClientsService.MovieEditorClientInfo(
+        editorId,
+        TypedWsChannelActor(rawChannel),
+        movieId
+      )
+      movieEditors.updateAndGet(_ + (editorId -> editor))
+      editor
+    }
+
   def movieEditorConnects(movieId: Movie.Id, rawChannel: cask.WsChannelActor): cask.WsActor = {
-    val movieEditor = ConnectedClientsService.MovieEditorClientInfo(
-      ConnectedClientsService.Ids.MovieEditorClientId.newId(),
-      TypedWsChannelActor(rawChannel),
-      movieId
-    )
+    val movieEditor = newConnection(movieId, rawChannel)
+
     val id = movieEditor.id
 
     movieEditors.updateAndGet(_ + (id -> movieEditor))
@@ -34,7 +51,7 @@ class ConnectedClientsService(using castor.Context, cask.util.Logger) {
     movieEditor.channel.actor(
       {
         case ComputerMessage.WebRTCToServerWrapper(message) =>
-          val providerId = ConnectedClientsService.Ids.ImageProviderClientId.fromUUID(message.recipientId)
+          val providerId = ConnectedClientsService.Ids.ImageProviderClientId.fromValue(message.recipientId)
           imageProviders
             .get()
             .get(providerId)
@@ -42,11 +59,11 @@ class ConnectedClientsService(using castor.Context, cask.util.Logger) {
             .foreach(_.send(PhoneMessage.WebRTCToPhoneWrapper(message.forward(id.value))))
           None
         case ComputerMessage.AskPicture(phoneId) =>
-          imageProviders.get().get(ConnectedClientsService.Ids.ImageProviderClientId.fromUUID(phoneId)) match {
+          imageProviders.get().get(ConnectedClientsService.Ids.ImageProviderClientId.fromValue(phoneId)) match {
             case None =>
               println(s"No phone with id $phoneId")
             case Some(imageProvider) =>
-              imageProvider.channel.send(PhoneMessage.ComputerAskedPicture(id.value))
+              imageProvider.channel.send(PhoneMessage.ComputerAskedPicture(id.value, movieId))
           }
           None
       },
@@ -78,7 +95,7 @@ class ConnectedClientsService(using castor.Context, cask.util.Logger) {
       imageProvider.channel.actor(
         {
           case PhoneMessage.WebRTCToServerWrapper(message) =>
-            val movieEditorId = ConnectedClientsService.Ids.MovieEditorClientId.fromUUID(message.recipientId)
+            val movieEditorId = ConnectedClientsService.Ids.MovieEditorClientId.fromValue(message.recipientId)
             movieEditors
               .get()
               .get(movieEditorId)
@@ -94,42 +111,32 @@ class ConnectedClientsService(using castor.Context, cask.util.Logger) {
     }
   }
 
-  def imageUploaded(movie: Movie.Id, recipient: UUID, imageData: ImageData): Boolean = {
-    val movieEditorId = ConnectedClientsService.Ids.MovieEditorClientId.fromUUID(recipient)
-    movieEditors.get.get(movieEditorId) match {
-      case None              => false
-      case Some(movieEditor) =>
-        movieEditor.channel.send(ComputerMessage.PictureData(imageData.id))
-        true
-    }
-  }
-
 }
 
 object ConnectedClientsService {
 
   object Ids {
-    opaque type MovieEditorClientId = UUID
+    opaque type MovieEditorClientId = String
 
     object MovieEditorClientId {
-      def newId(): MovieEditorClientId = UUID.randomUUID()
+      def newId(): MovieEditorClientId = UUID.randomUUID().toString
 
-      inline def fromUUID(uuid: UUID): MovieEditorClientId = uuid
+      inline def fromValue(value: String): MovieEditorClientId = value
 
       extension (id: MovieEditorClientId) {
-        inline def value: UUID = id
+        inline def value: String = id
       }
     }
 
-    opaque type ImageProviderClientId = UUID
+    opaque type ImageProviderClientId = String
 
     object ImageProviderClientId {
-      def newId(): ImageProviderClientId = UUID.randomUUID()
+      def newId(): ImageProviderClientId = UUID.randomUUID().toString
 
-      inline def fromUUID(uuid: UUID): ImageProviderClientId = uuid
+      inline def fromValue(value: String): ImageProviderClientId = value
 
       extension (id: ImageProviderClientId) {
-        inline def value: UUID = id
+        inline def value: String = id
       }
     }
   }

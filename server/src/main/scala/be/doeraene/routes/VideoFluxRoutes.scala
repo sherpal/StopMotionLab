@@ -11,7 +11,7 @@ class VideoFluxRoutes(using connectedClientsService: ConnectedClientsService)(us
 
   @cask.websocket("/ws/image-provider-connection/:editorId")
   def phone(editorId: String) = {
-    val typedEditorId = ConnectedClientsService.Ids.MovieEditorClientId.fromUUID(UUID.fromString(editorId))
+    val typedEditorId = ConnectedClientsService.Ids.MovieEditorClientId.fromValue(editorId)
     cask.WsHandler { underlying =>
       connectedClientsService.imageProviderConnects(typedEditorId, underlying) match {
         case Left(err) =>

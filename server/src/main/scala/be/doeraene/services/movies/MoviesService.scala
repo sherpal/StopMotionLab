@@ -61,6 +61,8 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
         db.createMovie(DBMovie(movie.id.value, movie.name, movie.createdAt, now()))
       case Event.NameChanged(newName) =>
         db.db.run(DBMovie.update(_.id === id).set(_.name := newName, _.lastUpdateAt := now()))
+      case Event.ImageAdded(_, _) =>
+        touchUpdateAt()
       case Event.Deleted(at) =>
         db.deleteMovie(Movie.Id(id))
       case data.movie.Movie.Event.ImagesRemoved(_) =>

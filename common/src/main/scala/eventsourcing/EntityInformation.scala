@@ -72,7 +72,7 @@ object EntityInformation {
     val eventHandler0   = eventHandler
     val commandHandler0 = commandHandler
     new EntityInformation[Command, Event, State] {
-      override def entityKind: EntityKind[Command, State] = EntityKind(ct.runtimeClass.getTypeName)
+      override def entityKind: EntityKind[Command, State] = EntityKind(ct.runtimeClass.getName)
 
       override def initialState: State = initialState0
 

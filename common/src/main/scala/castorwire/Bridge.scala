@@ -2,9 +2,8 @@ package castorwire
 
 import io.circe.{Codec, Decoder, Encoder}
 
-import scala.collection.concurrent.TrieMap
 import scala.deriving.Mirror
-import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.{AtomicLong, AtomicReference}
 
 /** One `Bridge` per open connection (websocket, ...). Lets a `castor.Actor[R]` embedded inside a message cross the wire
   * without the actor itself ever being serialized: encoding it registers it under a fresh opaque token, decoding a
@@ -18,7 +17,7 @@ import java.util.concurrent.atomic.AtomicLong
   */
 final class Bridge(sendMessage: WireMessage => Unit)(using ctx: castor.Context) {
 
-  private val registry = TrieMap.empty[String, io.circe.Json => Unit]
+  private val registry = AtomicReference(Map.empty[String, io.circe.Json => Unit])
   private val counter  = AtomicLong(0)
 
   /** Registers `actor` and returns the opaque token that stands in for it on the wire. `oneShot` (the default) removes
@@ -28,13 +27,13 @@ final class Bridge(sendMessage: WireMessage => Unit)(using ctx: castor.Context) 
     */
   def registerLocal[R](actor: castor.Actor[R], oneShot: Boolean = true)(using d: Decoder[R]): String = {
     val token = s"a${counter.incrementAndGet()}"
-    registry(token) = json => {
-      if oneShot then registry.remove(token)
+    registry.updateAndGet(_ + (token -> (json => {
+      if oneShot then registry.updateAndGet(_ - token)
       d.decodeJson(json) match {
         case Right(r)  => actor.send(r)
         case Left(err) => System.err.println(s"castorwire: failed to decode message for $token: $err")
       }
-    }
+    })))
     token
   }
 
@@ -50,12 +49,12 @@ final class Bridge(sendMessage: WireMessage => Unit)(using ctx: castor.Context) 
     * actor was registered under that token, if any (it may legitimately be gone already for a one-shot registration
     * that already fired, or if this frame is stale/bogus).
     */
-  def deliver(token: String, payload: io.circe.Json): Unit = registry.get(token).foreach(_(payload))
+  def deliver(token: String, payload: io.circe.Json): Unit = registry.get.get(token).foreach(_(payload))
 
-  def unregister(token: String): Unit = registry.remove(token)
+  def unregister(token: String): Unit = registry.updateAndGet(_ - token)
 
   /** Call on disconnect to drop any still-registered (e.g. non-one-shot) actors. */
-  def clear(): Unit = registry.clear()
+  def clear(): Unit = registry.set(Map.empty)
 }
 
 object Bridge {

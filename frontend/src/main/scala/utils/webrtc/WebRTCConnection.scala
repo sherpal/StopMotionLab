@@ -59,7 +59,7 @@ trait WebRTCConnection(using ExecutionContext) {
     else queuedOnIceCandidates += event
   }
 
-  protected def addIceCandidates(events: Iterable[OnIceCandidateEvent]): Unit =
+  private def addIceCandidates(events: Iterable[OnIceCandidateEvent]): Unit =
     events.foreach(addIceCandidate)
 
   protected var remoteDescriptionSet         = false
@@ -71,7 +71,7 @@ trait WebRTCConnection(using ExecutionContext) {
 
   protected def outWriter: Observer[WebRTCCommProtocol.SendOnIceCandidateEvent]
 
-  protected def recipientId: java.util.UUID
+  protected def recipientId: String
 
 }
 
@@ -79,10 +79,10 @@ object WebRTCConnection {
 
   class Consumer(
       protected val outWriter: Observer[WebRTCCommProtocol.ConsumerToServer],
-      providerId: java.util.UUID
+      providerId: String
   )(using ExecutionContext)
       extends WebRTCConnection {
-    protected def recipientId: java.util.UUID = providerId
+    protected def recipientId: String = providerId
 
     def videoStreamSignal: Signal[Option[MediaStream]] = videoStreamVar.signal
 
@@ -133,10 +133,10 @@ object WebRTCConnection {
   class Provider(
       stream: MediaStream,
       protected val outWriter: Observer[WebRTCCommProtocol.ProviderToServer],
-      consumerId: java.util.UUID
+      consumerId: String
   )(using ExecutionContext)
       extends WebRTCConnection {
-    protected def recipientId: java.util.UUID = consumerId
+    protected def recipientId: String = consumerId
 
     val inMessagesObserver: Observer[WebRTCCommProtocol.ServerToProvider] = Observer {
       case WebRTCCommProtocol.ForwardAskOffer(_)                   => // nothing to do here

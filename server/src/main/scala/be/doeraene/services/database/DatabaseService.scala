@@ -66,16 +66,18 @@ class DatabaseService(dataDirectory: Path, inTest: Boolean = false) {
 
   def createImageIfNotExists(uuid: java.util.UUID, contentType: ImageData.MimeType, bytes: Array[Byte]): Image =
     client.transaction { db =>
+      val now     = nowSeconds()
       val updated = db.run(
         Image
           .update(_.uuid === uuid)
           .set(
-            _.contentType := contentType,
-            _.image       := bytes
+            _.contentType  := contentType,
+            _.image        := bytes,
+            _.lastUpdateAt := now
           )
       )
 
-      val image = Image(uuid, contentType, bytes)
+      val image = Image(uuid, contentType, bytes, now)
       if updated > 0 then image
       else
         db.run(Image.insert.values(image))
@@ -84,6 +86,12 @@ class DatabaseService(dataDirectory: Path, inTest: Boolean = false) {
 
   def getImage(uuid: java.util.UUID): Option[Image] =
     db.run(Image.select.filter(_.uuid === uuid).take(1)).headOption
+
+  /** The last time the image with the given id was created or overwritten, in epoch seconds. Used for HTTP cache
+    * validation without having to load the (possibly large) image bytes.
+    */
+  def getImageLastUpdate(uuid: java.util.UUID): Option[Long] =
+    db.run(Image.select.filter(_.uuid === uuid).map(_.lastUpdateAt).take(1)).headOption
 
   private def imageExists(image: Image): Boolean = db.run(Image.select.filter(_.uuid === image.uuid).take(1)).nonEmpty
 

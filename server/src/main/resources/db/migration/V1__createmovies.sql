@@ -26,9 +26,10 @@ create table movie (
 );
 
 create table image (
-    uuid         text not null primary key,
-    content_type text,
-    image        blob not null
+    uuid           text not null primary key,
+    content_type   text,
+    image          blob not null,
+    last_update_at integer not null
 );
 
 create table movie_to_image (

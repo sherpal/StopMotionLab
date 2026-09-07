@@ -10,12 +10,11 @@ import org.scalajs.dom.{HttpMethod, RequestInit, Response}
 import urldsl.errors.DummyError
 import urldsl.vocabulary.{FromString, Printer}
 
-import java.util.UUID
 import scala.scalajs.js
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Try
 
-class ImagesService(maybeHost: Option[String])(using ExecutionContext) {
+class ImagesService(maybeHost: Option[String])(using httpClient: HttpClient)(using ExecutionContext) {
 
   private val pathPrefix = maybeHost.fold("/")(_.stripSuffix("/") ++ "/")
   private val api        = root / HttpClient.apiPrefix
@@ -24,9 +23,9 @@ class ImagesService(maybeHost: Option[String])(using ExecutionContext) {
     pathPrefix ++ (api / "images" / segment[ImageData.Id]).createPath(data.id)
 
   private val postImagePath =
-    (api / "images" / "upload") ? (param[Movie.Id]("movieId") & param[java.util.UUID]("recipient"))
+    (api / "images" / "upload") ? (param[Movie.Id]("movieId") & param[String]("recipient"))
 
-  def postImage(movieId: Movie.Id, recipient: java.util.UUID, blob: dom.Blob): Future[Response] =
+  def postImage(movieId: Movie.Id, recipient: String, blob: dom.Blob): Future[Response] =
     dom
       .fetch(
         pathPrefix ++ postImagePath.createUrlString((), (movieId, recipient)),
@@ -38,7 +37,15 @@ class ImagesService(maybeHost: Option[String])(using ExecutionContext) {
       )
       .toFuture
 
-  given FromString[UUID, DummyError] = str => Try(UUID.fromString(str)).toEither.left.map(_ => DummyError.dummyError)
-  given Printer[UUID]                = _.toString
+  def getImageBytes(imageId: ImageData.Id): Future[(ImageData.MimeType, Array[Byte])] =
+    httpClient.get.bytes(api / "images" / segment[ImageData.Id])(imageId).map { (contentType, bytes) =>
+      ImageData.MimeType.unsafeFromString(contentType) -> bytes
+    }
+
+  def getImageUrlEncoded(imageId: ImageData.Id): Future[String] =
+    getImageBytes(imageId).map { case (mimeType, bytes) =>
+      val base64 = java.util.Base64.getEncoder.encodeToString(bytes)
+      s"data:${mimeType.value};base64,$base64"
+    }
 
 }

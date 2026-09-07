@@ -14,7 +14,7 @@ import utils.websocket.JsonWebSocket
 import urldsl.language.dummyErrorImpl.*
 import utils.webrtc.WebRTCConnection
 
-import scala.concurrent.ExecutionContext
+import scala.concurrent.{ExecutionContext, Future}
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters.JSRichIterableOnce
 import scala.util.{Failure, Success}
@@ -26,9 +26,11 @@ object ComputerApp {
   )(using movieService: MoviesService, imagesService: ImagesService)(using ExecutionContext): HtmlElement = {
     val storage = LocalStorageService()
 
-    val websocket = JsonWebSocket[ComputerMessage.ServerToComputerMessage, ComputerMessage.ComputerToServerMessage](
-      root / "movieeditor"
-    )
+    val websocket = JsonWebSocket.withPathValue[
+      ComputerMessage.ServerToComputerMessage,
+      ComputerMessage.ComputerToServerMessage,
+      Movie.Id
+    ](root / "movie-editor-connection" / segment[Movie.Id], movieId)
 
     val (updateSubscription, updatesCancellation) = movieService.subscribe(movieId)
 
@@ -36,9 +38,12 @@ object ComputerApp {
 
     val initiallyLoaded: Signal[Boolean] = movieVar.signal.map(_.id != Movie.Id.dummy)
 
-    val currentProviderIdVar = Var(Option.empty[java.util.UUID])
+    val currentProviderIdVar = Var(Option.empty[String])
 
-    val picturesVar   = Var(Vector.empty[String])
+    // The id this computer session was assigned by the server, once its websocket is open; a phone that scans the
+    // QR code built from it can pair with this session.
+    val editorIdVar = Var(Option.empty[String])
+
     val askPictureBus = new EventBus[Unit]
 
     def movieDisplay = {
@@ -61,9 +66,21 @@ object ComputerApp {
       },
       onUnmountCallback(_ => websocket.close()),
 
-      websocket.inEvents.collect { case ComputerMessage.PictureData(id) =>
-        imagesService.imageUrl(ImageData(id))
-      } --> picturesVar.updater[String](_ :+ _),
+      websocket.inEvents.collect { case ComputerMessage.ThisIsYourId(id) =>
+        Some(id)
+      } --> editorIdVar.writer,
+
+      div(
+        h1("Connect a phone as camera"),
+        child.maybe <-- editorIdVar.signal.map(
+          _.map(id =>
+            img(
+              src := s"/api/phone-connect-qrcode?editorId=$id",
+              alt := "Scan with your phone to connect its camera"
+            )
+          )
+        )
+      ),
 
       websocket.inEvents
         .collect { case ComputerMessage.WebRTCToComputerWrapper(message) =>
@@ -104,31 +121,35 @@ object ComputerApp {
           Button(
             "Make movie!",
             _.events.onClick.preventDefault.mapToUnit --> Observer[Unit] { _ =>
-              val data = picturesVar.now()
-              utils.videoencoding.encodeToVideo(data.toJSArray, 1).onComplete {
-                case Failure(exception) => throw exception
-                case Success(arrayBuff) =>
-                  org.scalajs.dom.console.log(arrayBuff)
-                  val blob = dom.Blob(
-                    js.Array(arrayBuff),
-                    new BlobPropertyBag {
-                      `type` = "video/webm"
-                    }
-                  )
-                  val url = dom.URL.createObjectURL(blob)
+              val images = movieVar.now().sortedImages
+              Future
+                .sequence(images.map(image => imagesService.getImageUrlEncoded(image.id)))
+                .map(_.toJSArray)
+                .flatMap(utils.videoencoding.encodeToVideo(_, 1))
+                .onComplete {
+                  case Failure(exception) => throw exception
+                  case Success(arrayBuff) =>
+                    org.scalajs.dom.console.log(arrayBuff)
+                    val blob = dom.Blob(
+                      js.Array(arrayBuff),
+                      new BlobPropertyBag {
+                        `type` = "video/webm"
+                      }
+                    )
+                    val url = dom.URL.createObjectURL(blob)
 
-                  val link = dom.document
-                    .createElement("a")
-                    .asInstanceOf[dom.html.Anchor]
+                    val link = dom.document
+                      .createElement("a")
+                      .asInstanceOf[dom.html.Anchor]
 
-                  link.href = url
-                  link.download = "stop-motion.webm"
-                  link.click()
+                    link.href = url
+                    link.download = "stop-motion.webm"
+                    link.click()
 
-                  dom.URL.revokeObjectURL(url)
-              }
+                    dom.URL.revokeObjectURL(url)
+                }
             },
-            _.disabled <-- picturesVar.signal.map(_.isEmpty)
+            _.disabled <-- movieVar.signal.map(_.images.isEmpty)
           )
         ),
         movieDisplay
@@ -140,7 +161,7 @@ object ComputerApp {
   }
 
   private def componentFromOffer(
-      providerId: java.util.UUID,
+      providerId: String,
       socketWriter: Observer[ComputerMessage.ComputerToServerMessage],
       socketMessages: EventStream[WebRTCCommProtocol.ServerToConsumer]
   )(using ExecutionContext): HtmlElement = {

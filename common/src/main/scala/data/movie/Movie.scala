@@ -19,8 +19,14 @@ case class Movie(
   def deleted: Boolean = deletedAt > 0L
   def active: Boolean  = created && !deleted
 
+  def lastIndex: Option[Int] = images.flatMap(_.maybeIndex).maxOption
+
   def containsImage(imageId: ImageData.Id, atIndex: Int): Boolean =
     images.exists(info => info.imageData.id == imageId && info.maybeIndex.contains[Int](atIndex))
+
+  def sortedImages: Vector[ImageData] = images.sorted.collect { case Movie.ImageDataWithOrdering(imageData, Some(_)) =>
+    imageData
+  }
 }
 
 object Movie {
@@ -57,6 +63,7 @@ object Movie {
     case Get(replyTo: castor.Actor[Option[Movie]])
     case Delete(replyTo: castor.Actor[Boolean])
     case RawGet(replyTo: castor.Actor[Movie])
+    case AddImage(imageId: ImageData.Id, replyTo: castor.Actor[Boolean])
     case RemoveImages(toRemove: Vector[(ImageData.Id, Int)], replyTo: castor.Actor[Boolean])
     case DuplicateImages(toDuplicate: Vector[(ImageData.Id, Int)], replyTo: castor.Actor[Boolean])
     case MoveImageRange(direction: MoveDirection, minIndex: Int, maxIndex: Int, replyTo: castor.Actor[Boolean])
@@ -79,6 +86,10 @@ object Movie {
           else Effect.ReplyTo(replyTo, _ => false)
         case RawGet(replyTo) =>
           Effect.ReplyTo(replyTo, identity)
+        case AddImage(imageId, replyTo) =>
+          if state.active then
+            Effect.Persist(Event.ImageAdded(imageId, state.lastIndex.getOrElse(-1) + 1)).thenReply(replyTo)(_ => true)
+          else Effect.ReplyTo(replyTo, _ => false)
         case RemoveImages(toRemove, replyTo) =>
           if state.active && toRemove.forall(state.containsImage) then
             Effect.Persist(Event.ImagesRemoved(toRemove)).thenReply(replyTo)(_ => true)
@@ -114,6 +125,7 @@ object Movie {
     case Created(id: Id, at: Long)
     case NameChanged(newName: String)
     case Deleted(at: Long)
+    case ImageAdded(imageId: ImageData.Id, atIndex: Int)
     case ImagesRemoved(toRemove: Vector[(ImageData.Id, Int)])
     case ImagesDuplicated(toDuplicate: Vector[(ImageData.Id, Int)])
     case RangeMoved(direction: MoveDirection, minIndex: Int, maxIndex: Int)
@@ -128,6 +140,10 @@ object Movie {
         movie.copy(name = newName)
       case Deleted(at) =>
         movie.copy(deletedAt = at)
+      case ImageAdded(imageId, atIndex) =>
+        val data      = Movie.ImageDataWithOrdering(ImageData(imageId), Some(atIndex))
+        val newImages = movie.images :+ data
+        movie.copy(images = newImages)
       case ImagesRemoved(toRemove) =>
         val removedIndices = toRemove.map(_._2)
 

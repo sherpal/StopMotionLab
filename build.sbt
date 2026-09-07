@@ -84,8 +84,9 @@ lazy val server = project
     commonSettings,
     name := "StopMotionLabServer",
     libraryDependencies ++= Seq(
-      "com.lihaoyi" %% "cask"   % "0.11.3",
-      "com.lihaoyi" %% "os-lib" % "0.11.8"
+      "com.lihaoyi"      %% "cask"   % "0.11.3",
+      "com.lihaoyi"      %% "os-lib" % "0.11.8",
+      "com.google.zxing" % "core"    % "3.5.3"
     ) ++ databaseStuff,
     fork := true
   )

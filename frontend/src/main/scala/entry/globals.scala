@@ -42,16 +42,16 @@ import urldsl.language.dummyErrorImpl.*
       child <-- Routes
         .firstOf(
           Route(base / home, _ => Home()),
-          Route(base / phonePath, _ => PhoneApp()),
+          Route((base / phonePath) ? editorIdParam, (_, editorId) => PhoneApp(editorId)),
           Route(base / movieEditorPath, ComputerApp(_)),
           Route(
             base,
             _ =>
               div(
                 onMountCallback { _ =>
-                  Router.router.moveTo(
-                    "/" ++ (base / (if isMobile then phonePath else home)).createPath()
-                  )
+                  // A bare visit (not via a scanned QR code) has no editorId to pair with, so it can only
+                  // ever make sense to land on the movie-editor home screen.
+                  Router.router.moveTo("/" ++ (base / home).createPath())
                 }
               )
           )

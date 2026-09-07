@@ -21,6 +21,12 @@ class ImagesService()(using db: DatabaseService) {
     db.getImage(id.uuidValue)
       .map(image => (image.contentType, image.image))
 
+  /** When the image was last created/overwritten, in epoch seconds. Cheap compared to `retrieve`, since it doesn't
+    * load the image bytes; meant for HTTP cache validation.
+    */
+  def lastUpdated(id: ImageData.Id): Option[Long] =
+    db.getImageLastUpdate(id.uuidValue)
+
   def imageType(bytes: Array[Byte]): Option[ImageData.MimeType] =
     if bytes.length >= 3 &&
       bytes(0) == 0xff.toByte &&

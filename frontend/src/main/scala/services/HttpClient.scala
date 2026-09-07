@@ -9,6 +9,7 @@ import org.scalajs.dom.{HttpMethod, RequestInit, fetch}
 import scala.concurrent.{ExecutionContext, Future}
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters.*
+import scala.scalajs.js.typedarray.Int8Array
 
 class HttpClient(maybeApiHost: Option[String])(using ExecutionContext) {
   private final class RequestFailed(code: Int) extends Exception(s"Error code: $code")
@@ -116,6 +117,25 @@ class HttpClient(maybeApiHost: Option[String])(using ExecutionContext) {
 
   def get[R](using ExecutionContext): GETResponseFilled[R] =
     new GETResponseFilled[R] {
+
+      def bytes[T](path: HttpClient.Path[T])(t: T)(using ExecutionContext): Future[(String, Array[Byte])] = {
+        val url =
+          maybeApiHost.fold(dom.document.location.origin)(_.stripSuffix("/")) ++
+            s"/$apiPrefix/" ++
+            path.createPath(t)
+
+        fetch(url, new RequestInit { method = HttpMethod.GET }).toFuture.flatMap { response =>
+          if !response.ok then
+            response.text().toFuture.flatMap(err => Future.failed(RuntimeException(s"${response.status}: $err")))
+          else
+            response.arrayBuffer().toFuture.map { buffer =>
+              val bytes = Int8Array(buffer).toArray[Byte]
+
+              val contentType = Option(response.headers.get("Content-Type")).getOrElse("application/octet-stream")
+              (contentType, bytes)
+            }
+        }
+      }
 
       def apply[T, Q](
           path: HttpClient.Path[T],
@@ -261,6 +281,9 @@ class HttpClient(maybeApiHost: Option[String])(using ExecutionContext) {
       * element of type `R`.
       */
     def apply[Q](path: HttpClient.Path[Unit], query: HttpClient.Query[Q])(q: Q)(using decoder: Decoder[R]): Future[R]
+
+    /** Makes a GET http call to the given [[Path]] and returns the raw bytes of the response. */
+    def bytes[T](path: HttpClient.Path[T])(t: T)(using ExecutionContext): Future[(String, Array[Byte])]
 
   }
 
