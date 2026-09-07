@@ -17,8 +17,12 @@ class PhoneConnectionRoutes(using cask.util.Logger) extends cask.Routes with Hel
     NetworkUtils.localNetworkAddress.map(ip => s"$scheme://$ip:$port")
   }
 
+  // The frontend is built with Vite's `base` set to "/static/" (see frontend/vite.config.js), so every app route,
+  // including "/phone", is actually served under that prefix. Overridable in case that base ever changes.
+  private def basePath: String = "/" ++ sys.props.getOrElse("publicBasePath", "static").stripPrefix("/").stripSuffix("/")
+
   private def phoneConnectUrl(editorId: String): Option[String] =
-    publicOrigin.map(origin => s"$origin/phone?editorId=$editorId")
+    publicOrigin.map(origin => s"$origin$basePath/phone?editorId=$editorId")
 
   @cask.get("api/phone-connect-info")
   def phoneConnectInfo(editorId: String) = phoneConnectUrl(editorId) match {

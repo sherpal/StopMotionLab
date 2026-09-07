@@ -301,7 +301,7 @@ object MovieDisplay {
         ),
         duplicateSelectedBus.events
           .sample(selectedIndicesVar.signal, imagesSignal)
-          .map((selected, images) => images.map(_.id).zipWithIndex)
+          .map((selected, images) => images.map(_.id).zipWithIndex.filter((_, index) => selected.contains(index)))
           .flatMapSwitch(toDuplicate =>
             EventStream.fromFuture(movieService.sendCommand(movieId, Movie.Command.DuplicateImages(toDuplicate, _)))
           ) --> Observer.empty

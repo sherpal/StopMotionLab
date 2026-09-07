@@ -64,7 +64,7 @@ class ImagesRoutes(using
   def uploadImage(movieId: Int, recipient: String, request: cask.Request) = {
     val bytes         = request.bytes
     val maybeMimeType = for {
-      httpContentType <- request.httpContentType.toRight(s"Missing Image content type")
+      httpContentType <- request.headers.get("content-type").flatMap(_.headOption).toRight(s"Missing Image content type")
       claimedMimeType <- ImageData.MimeType.fromString(httpContentType)
       derivedMimeType <- imageService.imageType(bytes).toRight("Could not derive mime type from bytes")
       _               <- Either.cond(

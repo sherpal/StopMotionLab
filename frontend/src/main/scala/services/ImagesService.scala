@@ -32,7 +32,7 @@ class ImagesService(maybeHost: Option[String])(using httpClient: HttpClient)(usi
         new RequestInit {
           method = HttpMethod.POST
           body = blob
-          headers = js.Dictionary("Content-Type" -> blob.`type`)
+          headers = js.Dictionary("Content-Type" -> blob.`type`.toLowerCase)
         }
       )
       .toFuture

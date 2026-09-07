@@ -75,8 +75,9 @@ object ComputerApp {
         child.maybe <-- editorIdVar.signal.map(
           _.map(id =>
             img(
-              src := s"/api/phone-connect-qrcode?editorId=$id",
-              alt := "Scan with your phone to connect its camera"
+              widthAttr := 200,
+              src       := s"/api/phone-connect-qrcode?editorId=$id",
+              alt       := "Scan with your phone to connect its camera"
             )
           )
         )
