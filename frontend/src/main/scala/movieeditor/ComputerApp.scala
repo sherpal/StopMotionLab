@@ -1,9 +1,11 @@
 package movieeditor
 
-import be.doeraene.webcomponents.ui5.Button
+import be.doeraene.webcomponents.ui5.configkeys.IconName
+import be.doeraene.webcomponents.ui5.{Button, Icon, Title}
 import com.raquo.laminar.api.L.*
 import communication.webrtc.WebRTCCommProtocol
 import communication.ComputerMessage
+import components.{ModifiableTitle, Router, base}
 import data.images.ImageData
 import data.movie.Movie
 import data.movie.Movie.ImageDataWithOrdering
@@ -44,6 +46,9 @@ object ComputerApp {
     // QR code built from it can pair with this session.
     val editorIdVar = Var(Option.empty[String])
 
+    // when true, send every second the "take picture" message to the provider
+    val burstActive = Var(false)
+
     val askPictureBus = new EventBus[Unit]
 
     def movieDisplay = {
@@ -60,6 +65,15 @@ object ComputerApp {
     div(
       display <-- initiallyLoaded.map(if _ then "block" else "none"),
       "movieeditor",
+
+      Button.of(
+        _.iconOnly := true,
+        _.icon     := IconName.home,
+        _.events.onClick.mapToUnit --> Observer[Unit](_ =>
+          Router.router.moveTo("/" ++ (base / entry.DefinedRoutes.home).createPath())
+        )
+      ),
+
       onMountBind { ctx =>
         given Owner = ctx.owner
         EventStream.fromFuture(websocket.open) --> Observer.empty
@@ -69,6 +83,13 @@ object ComputerApp {
       websocket.inEvents.collect { case ComputerMessage.ThisIsYourId(id) =>
         Some(id)
       } --> editorIdVar.writer,
+
+      ModifiableTitle.h1(
+        movieVar.signal.map(_.name),
+        Observer[String](newName => movieService.sendCommand(movieId, Movie.Command.ChangeName(newName, _)))
+          .filter(_.nonEmpty)
+          .contramap[String](_.trim)
+      ),
 
       div(
         h1("Connect a phone as camera"),
@@ -117,7 +138,7 @@ object ComputerApp {
                 providerId
               }
               .map(ComputerMessage.AskPicture(_)) --> websocket.outWriter,
-            disabled <-- websocket.isOpenSignal.invert
+            disabled <-- websocket.isOpenSignal.invert.combineWithFn(burstActive.signal)(_ || _)
           ),
           Button(
             "Make movie!",
@@ -150,7 +171,25 @@ object ComputerApp {
                     dom.URL.revokeObjectURL(url)
                 }
             },
-            _.disabled <-- movieVar.signal.map(_.images.isEmpty)
+            _.disabled <-- movieVar.signal.map(_.images.isEmpty).combineWithFn(burstActive.signal)(_ || _)
+          ),
+          Button.of(
+            _ =>
+              child <-- burstActive.signal.map(if _ then
+                span(Icon.of(_.name := IconName.stop, _ => marginRight := "0.5em"), "Arrêter rafale")
+              else span(Icon.of(_.name := IconName.play, _ => marginRight := "0.5em"), "Démarrer rafale")),
+            _.events.onClick.mapToUnit --> burstActive.invertWriter,
+            _ =>
+              EventStream
+                .periodic(1000)
+                .sample(burstActive.signal)
+                .filter(identity)
+                .mapToUnit
+                .sample(currentProviderIdVar.signal)
+                .collect { case Some(providerId) =>
+                  providerId
+                }
+                .map(ComputerMessage.AskPicture(_)) --> websocket.outWriter
           )
         ),
         movieDisplay
