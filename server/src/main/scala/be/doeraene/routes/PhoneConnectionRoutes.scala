@@ -3,11 +3,15 @@ package be.doeraene.routes
 import be.doeraene.qrcode.QrCode
 import be.doeraene.utils.NetworkUtils
 
-/** Lets the "computer" side of the app find out how a phone on the same Wi-Fi network can reach it, so it can display a
-  * QR code that a phone camera can scan to open the pairing page directly.
-  */
+import java.nio.file.{Files, Path}
+
+/** Lets the "computer" side of the app find out how a phone on the same Wi-Fi network can reach it, so it can
+  * display a QR code that a phone camera can scan to open the pairing page directly. */
 //noinspection TypeAnnotation
 class PhoneConnectionRoutes(using cask.util.Logger) extends cask.Routes with Helpers {
+
+  // Kept in sync with be.doeraene.entry.MakeSslContext, which writes the CA's public cert there.
+  private val caCertFile: Path = Path.of("./data/certs/ca.crt")
 
   // The scheme/port a phone should hit are overridable, since in dev the browser-facing origin is the Vite dev
   // server (fronting this backend), not this process's own bind port.
@@ -35,6 +39,29 @@ class PhoneConnectionRoutes(using cask.util.Logger) extends cask.Routes with Hel
   def phoneConnectQrcode(editorId: String) = phoneConnectUrl(editorId) match {
     case None      => cask.Response("no LAN address found", statusCode = 503)
     case Some(url) => cask.Response(QrCode.svg(url), headers = Seq("Content-Type" -> "image/svg+xml"))
+  }
+
+  // A one-time "trust this device" step: installing this root on a phone makes every future server certificate
+  // (even one re-issued for a new LAN IP after a Wi-Fi change) trusted automatically, no more browser warnings.
+  // The content type is what makes iOS/Android offer to install it as a certificate rather than just downloading it.
+  @cask.get("api/ca-cert")
+  def caCert() =
+    if !Files.exists(caCertFile) then
+      cask.Response("no certificate authority generated yet".getBytes, statusCode = 503)
+    else
+      cask.Response(
+        Files.readAllBytes(caCertFile),
+        headers = Seq(
+          "Content-Type"        -> "application/x-x509-ca-cert",
+          "Content-Disposition" -> "attachment; filename=\"stop-motion-lab-ca.crt\""
+        )
+      )
+
+  @cask.get("api/ca-cert-qrcode")
+  def caCertQrcode() = publicOrigin match {
+    case None         => cask.Response("no LAN address found", statusCode = 503)
+    case Some(origin) =>
+      cask.Response(QrCode.svg(s"$origin/api/ca-cert"), headers = Seq("Content-Type" -> "image/svg+xml"))
   }
 
   initialize()

@@ -84,9 +84,10 @@ lazy val server = project
     commonSettings,
     name := "StopMotionLabServer",
     libraryDependencies ++= Seq(
-      "com.lihaoyi"      %% "cask"   % "0.11.3",
-      "com.lihaoyi"      %% "os-lib" % "0.11.8",
-      "com.google.zxing" % "core"    % "3.5.3"
+      "com.lihaoyi"      %% "cask"          % "0.11.3",
+      "com.lihaoyi"      %% "os-lib"        % "0.11.8",
+      "com.google.zxing" % "core"           % "3.5.3",
+      "org.bouncycastle" % "bcpkix-jdk18on" % "1.79" // mints the local self-signed TLS certificate authority/leaf certs
     ) ++ databaseStuff,
     fork := true
   )
