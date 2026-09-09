@@ -1,7 +1,7 @@
 package entry
 
 import com.raquo.laminar.api.L.*
-import components.{Route, Router, Routes, base, baseStr}
+import components.{AppStyles, Route, Router, Routes, base, baseStr}
 import movieeditor.{ComputerApp, Home}
 import org.scalajs.dom
 import phone.PhoneApp
@@ -37,7 +37,7 @@ import urldsl.language.dummyErrorImpl.*
   render(
     dom.document.getElementById("root"),
     div(
-      h1("hello world"),
+      AppStyles(),
 
       child <-- Routes
         .firstOf(

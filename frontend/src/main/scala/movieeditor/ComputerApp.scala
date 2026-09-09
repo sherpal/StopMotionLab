@@ -1,7 +1,7 @@
 package movieeditor
 
-import be.doeraene.webcomponents.ui5.configkeys.IconName
-import be.doeraene.webcomponents.ui5.{Button, Icon, Title}
+import be.doeraene.webcomponents.ui5.configkeys.{BarDesign, ButtonDesign, IconName, MessageStripDesign, TagDesign}
+import be.doeraene.webcomponents.ui5.{Bar, Button, BusyIndicator, Card, Icon, MessageStrip, Tag, Text}
 import com.raquo.laminar.api.L.*
 import communication.webrtc.WebRTCCommProtocol
 import communication.ComputerMessage
@@ -49,30 +49,252 @@ object ComputerApp {
     // when true, send every second the "take picture" message to the provider
     val burstActive = Var(false)
 
+    // true while a "make movie" export is being encoded, so the UI can show that something is happening
+    val encodingVar = Var(false)
+
     val askPictureBus = new EventBus[Unit]
 
-    def movieDisplay = {
-      div(
-        MovieDisplay(
-          movieId,
-          movieVar.signal
-            .map(_.images.sorted.collect { case ImageDataWithOrdering(imageData, Some(_)) => imageData })
-        )
+    // Only worth showing the QR code while nobody is connected yet.
+    val showQrIdSignal: Signal[Option[String]] =
+      editorIdVar.signal.combineWithFn(currentProviderIdVar.signal)((id, provider) => if provider.isEmpty then id else None)
+
+    def statusTag: HtmlElement =
+      Tag.of(
+        _.design <-- websocket.isOpenSignal.map(if _ then TagDesign.Positive else TagDesign.Negative),
+        _.slots.icon := Icon.of(
+          _.name <-- websocket.isOpenSignal.map(if _ then IconName.connected else IconName.disconnected)
+        ),
+        _ => child.text <-- websocket.isOpenSignal.map(if _ then "Connecté" else "Connexion…")
       )
-//      MovieDisplay.testElement()
-    }
+
+    def headerBar: HtmlElement =
+      Bar.of(
+        _.design := BarDesign.Header,
+        _.slots.startContent := Button.of(
+          _.iconOnly := true,
+          _.icon     := IconName.home,
+          _.tooltip  := "Retour à l'accueil",
+          _.events.onClick.mapToUnit --> Observer[Unit](_ =>
+            Router.router.moveTo("/" ++ (base / entry.DefinedRoutes.home).createPath())
+          )
+        ),
+        _ =>
+          ModifiableTitle.h3(
+            movieVar.signal.map(_.name),
+            Observer[String](newName => movieService.sendCommand(movieId, Movie.Command.ChangeName(newName, _)))
+              .filter(_.nonEmpty)
+              .contramap[String](_.trim)
+          ),
+        _.slots.endContent := statusTag
+      )
+
+    def connectSection: HtmlElement =
+      Card.of(
+        // see the comment on the Storyboard card in MovieDisplay: ui5-card is inline-block by default and must
+        // be pinned to a block box at 100% width, or it shrink-to-fits its content instead of respecting its
+        // flex-basis in the row below.
+        _ => display.block,
+        _ => width.percent := 100,
+        _ => boxSizing.borderBox,
+        _.slots.header := Card.header.of(
+          _.titleText    := "Connecter une caméra",
+          _.subtitleText := "Scanne ce QR code avec ton téléphone"
+        ),
+        _ =>
+          div(
+            padding.px := 16,
+            display.flex,
+            flexDirection.column,
+            alignItems.center,
+            gap.px     := 12,
+            minHeight.px := 200,
+            child <-- showQrIdSignal.combineWithFn(currentProviderIdVar.signal) {
+              case (Some(id), _) =>
+                div(
+                  cls("smlab-fade-in"),
+                  display.flex,
+                  flexDirection.column,
+                  alignItems.center,
+                  gap.px := 8,
+                  img(
+                    className := "smlab-framed",
+                    widthAttr := 200,
+                    src       := s"/api/phone-connect-qrcode?editorId=$id",
+                    alt       := "Scan with your phone to connect its camera"
+                  ),
+                  Text("Ouvre l'appareil photo de ton téléphone et scanne ce code")
+                )
+              case (None, Some(_)) =>
+                MessageStrip.of(
+                  _.design          := MessageStripDesign.Positive,
+                  _.hideCloseButton := true,
+                  _ => "Téléphone connecté !"
+                )
+              case (None, None) =>
+                div(
+                  display.flex,
+                  alignItems.center,
+                  gap.px  := 8,
+                  opacity := 0.6,
+                  Icon.of(_.name := IconName.disconnected),
+                  Text("En attente de la connexion au serveur…")
+                )
+            }
+          )
+      )
+
+    def cameraSection: HtmlElement =
+      Card.of(
+        _ => display.block,
+        _ => width.percent := 100,
+        _ => boxSizing.borderBox,
+        _.slots.header := Card.header.of(_.titleText := "Aperçu caméra"),
+        _ =>
+          div(
+            padding.px   := 8,
+            minHeight.px := 216,
+            display.flex,
+            alignItems.center,
+            justifyContent.center,
+            child <-- currentProviderIdVar.signal.map {
+              case Some(id) =>
+                componentFromOffer(
+                  id,
+                  websocket.outWriter,
+                  websocket.inEvents.collect { case ComputerMessage.WebRTCToComputerWrapper(message) =>
+                    message
+                  }
+                )
+              case None =>
+                div(
+                  display.flex,
+                  flexDirection.column,
+                  alignItems.center,
+                  gap.px  := 8,
+                  opacity := 0.5,
+                  Icon.of(_.name := IconName.camera),
+                  Text("En attente d'une caméra…")
+                )
+            }
+          )
+      )
+
+    def actionsSection: HtmlElement =
+      Card.of(
+        _ => display.block,
+        _ => width.percent := 100,
+        _ => boxSizing.borderBox,
+        _.slots.header := Card.header.of(_.titleText := "Prise de vue"),
+        _ =>
+          div(
+            padding.px := 16,
+            display.flex,
+            flexDirection.column,
+            gap.px     := 12,
+            child.maybe <-- burstActive.signal.map(
+              Option.when(_)(
+                MessageStrip.of(
+                  _.design          := MessageStripDesign.Information,
+                  _.hideCloseButton := true,
+                  _ => "📸 Rafale activée — une photo est demandée chaque seconde"
+                )
+              )
+            ),
+            div(
+              display.flex,
+              alignItems.center,
+              flexWrap.wrap,
+              gap.px := 12,
+              Button.of(
+                _.icon   := IconName.camera,
+                _ => "Prendre une photo",
+                _.disabled <-- websocket.isOpenSignal.invert.combineWithFn(burstActive.signal)(_ || _),
+                _.events.onClick.preventDefault.mapToUnit --> askPictureBus.writer
+              ),
+              Button.of(
+                _.icon   := IconName.video,
+                _ => "Créer le film",
+                _.design := ButtonDesign.Emphasized,
+                _.disabled <-- movieVar.signal
+                  .map(_.images.isEmpty)
+                  .combineWithFn(burstActive.signal.combineWithFn(encodingVar.signal)(_ || _))(_ || _),
+                _.events.onClick.preventDefault.mapToUnit --> Observer[Unit] { _ =>
+                  encodingVar.set(true)
+                  val images = movieVar.now().sortedImages
+                  Future
+                    .sequence(images.map(image => imagesService.getImageUrlEncoded(image.id)))
+                    .map(_.toJSArray)
+                    .flatMap(utils.videoencoding.encodeToVideo(_, 1))
+                    .onComplete {
+                      case Failure(exception) =>
+                        encodingVar.set(false)
+                        throw exception
+                      case Success(arrayBuff) =>
+                        encodingVar.set(false)
+                        val blob = dom.Blob(
+                          js.Array(arrayBuff),
+                          new BlobPropertyBag {
+                            `type` = "video/webm"
+                          }
+                        )
+                        val url = dom.URL.createObjectURL(blob)
+
+                        val link = dom.document
+                          .createElement("a")
+                          .asInstanceOf[dom.html.Anchor]
+
+                        link.href = url
+                        link.download = "stop-motion.webm"
+                        link.click()
+
+                        dom.URL.revokeObjectURL(url)
+                    }
+                }
+              ),
+              child.maybe <-- encodingVar.signal.map(
+                Option.when(_)(
+                  div(
+                    display.flex,
+                    alignItems.center,
+                    gap.px := 8,
+                    BusyIndicator.of(_.active := true),
+                    Text("Encodage de la vidéo…")
+                  )
+                )
+              ),
+              Button.of(
+                _ =>
+                  child <-- burstActive.signal.map(if _ then
+                    span(Icon.of(_.name := IconName.stop, _ => marginRight := "0.5em"), "Arrêter rafale")
+                  else span(Icon.of(_.name := IconName.record, _ => marginRight := "0.5em"), "Démarrer rafale")),
+                _.design <-- burstActive.signal.map(if _ then ButtonDesign.Negative else ButtonDesign.Default),
+                _.events.onClick.mapToUnit --> burstActive.invertWriter,
+                _ =>
+                  EventStream
+                    .periodic(1000)
+                    .sample(burstActive.signal)
+                    .filter(identity)
+                    .mapToUnit
+                    .sample(currentProviderIdVar.signal)
+                    .collect { case Some(providerId) =>
+                      providerId
+                    }
+                    .map(ComputerMessage.AskPicture(_)) --> websocket.outWriter
+              )
+            )
+          )
+      )
 
     div(
       display <-- initiallyLoaded.map(if _ then "block" else "none"),
-      "movieeditor",
+      padding.px      := 16,
+      boxSizing.borderBox,
+      display.flex,
+      flexDirection.column,
+      gap.px          := 16,
+      backgroundColor := "var(--sapBackgroundColor, transparent)",
 
-      Button.of(
-        _.iconOnly := true,
-        _.icon     := IconName.home,
-        _.events.onClick.mapToUnit --> Observer[Unit](_ =>
-          Router.router.moveTo("/" ++ (base / entry.DefinedRoutes.home).createPath())
-        )
-      ),
+      headerBar,
 
       onMountBind { ctx =>
         given Owner = ctx.owner
@@ -84,26 +306,6 @@ object ComputerApp {
         Some(id)
       } --> editorIdVar.writer,
 
-      ModifiableTitle.h1(
-        movieVar.signal.map(_.name),
-        Observer[String](newName => movieService.sendCommand(movieId, Movie.Command.ChangeName(newName, _)))
-          .filter(_.nonEmpty)
-          .contramap[String](_.trim)
-      ),
-
-      div(
-        h1("Connect a phone as camera"),
-        child.maybe <-- editorIdVar.signal.map(
-          _.map(id =>
-            img(
-              widthAttr := 200,
-              src       := s"/api/phone-connect-qrcode?editorId=$id",
-              alt       := "Scan with your phone to connect its camera"
-            )
-          )
-        )
-      ),
-
       websocket.inEvents
         .collect { case ComputerMessage.WebRTCToComputerWrapper(message) =>
           message
@@ -112,89 +314,29 @@ object ComputerApp {
           Some(providerId)
         } --> currentProviderIdVar.writer,
 
-      child.maybe <-- currentProviderIdVar.signal.map(
-        _.map(id =>
-          componentFromOffer(
-            id,
-            websocket.outWriter,
-            websocket.inEvents.collect { case ComputerMessage.WebRTCToComputerWrapper(message) =>
-              message
-            }
-          )
+      div(
+        display.flex,
+        flexWrap.wrap,
+        gap.px := 16,
+        div(flex := "1 1 320px", connectSection),
+        div(flex := "1 1 320px", cameraSection)
+      ),
+
+      actionsSection,
+
+      // Plain div on purpose: ui5-busy-indicator's own shadow DOM doesn't constrain slotted content to its host's
+      // width (its host box can be capped while the slotted content still overflows it), which is exactly what
+      // let the storyboard grow unbounded before. A plain block div has no such surprise, so the encoding spinner
+      // now lives next to the "Créer le film" button instead of wrapping the whole storyboard.
+      div(
+        width.percent := 100,
+        MovieDisplay(
+          movieId,
+          movieVar.signal
+            .map(_.images.sorted.collect { case ImageDataWithOrdering(imageData, Some(_)) => imageData })
         )
       ),
 
-      hr(),
-
-      div(
-        h1("Pictures!"),
-        div(
-          Button(
-            "Take picture",
-            _.events.onClick.preventDefault.mapToUnit --> askPictureBus.writer,
-            askPictureBus.events
-              .sample(currentProviderIdVar.signal)
-              .collect { case Some(providerId) =>
-                providerId
-              }
-              .map(ComputerMessage.AskPicture(_)) --> websocket.outWriter,
-            disabled <-- websocket.isOpenSignal.invert.combineWithFn(burstActive.signal)(_ || _)
-          ),
-          Button(
-            "Make movie!",
-            _.events.onClick.preventDefault.mapToUnit --> Observer[Unit] { _ =>
-              val images = movieVar.now().sortedImages
-              Future
-                .sequence(images.map(image => imagesService.getImageUrlEncoded(image.id)))
-                .map(_.toJSArray)
-                .flatMap(utils.videoencoding.encodeToVideo(_, 1))
-                .onComplete {
-                  case Failure(exception) => throw exception
-                  case Success(arrayBuff) =>
-                    org.scalajs.dom.console.log(arrayBuff)
-                    val blob = dom.Blob(
-                      js.Array(arrayBuff),
-                      new BlobPropertyBag {
-                        `type` = "video/webm"
-                      }
-                    )
-                    val url = dom.URL.createObjectURL(blob)
-
-                    val link = dom.document
-                      .createElement("a")
-                      .asInstanceOf[dom.html.Anchor]
-
-                    link.href = url
-                    link.download = "stop-motion.webm"
-                    link.click()
-
-                    dom.URL.revokeObjectURL(url)
-                }
-            },
-            _.disabled <-- movieVar.signal.map(_.images.isEmpty).combineWithFn(burstActive.signal)(_ || _)
-          ),
-          Button.of(
-            _ =>
-              child <-- burstActive.signal.map(if _ then
-                span(Icon.of(_.name := IconName.stop, _ => marginRight := "0.5em"), "Arrêter rafale")
-              else span(Icon.of(_.name := IconName.play, _ => marginRight := "0.5em"), "Démarrer rafale")),
-            _.events.onClick.mapToUnit --> burstActive.invertWriter,
-            _ =>
-              EventStream
-                .periodic(1000)
-                .sample(burstActive.signal)
-                .filter(identity)
-                .mapToUnit
-                .sample(currentProviderIdVar.signal)
-                .collect { case Some(providerId) =>
-                  providerId
-                }
-                .map(ComputerMessage.AskPicture(_)) --> websocket.outWriter
-          )
-        ),
-        movieDisplay
-        // MovieDisplay.testElement()
-      ),
       onUnmountCallback(_ => updatesCancellation()),
       updateSubscription --> movieVar.writer
     )
@@ -210,8 +352,11 @@ object ComputerApp {
       WebRTCConnection.Consumer(socketWriter.contramap(ComputerMessage.WebRTCToServerWrapper(_)), providerId)
 
     div(
+      className := "smlab-framed",
       child.maybe <-- webRTCConnection.videoStreamSignal.map(_.map { stream =>
         videoTag(
+          maxWidth.percent := 100,
+          display.block,
           onMountCallback { ctx =>
             ctx.thisNode.ref.srcObject = stream
             ctx.thisNode.ref.play()

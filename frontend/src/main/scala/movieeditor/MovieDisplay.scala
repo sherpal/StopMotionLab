@@ -1,7 +1,7 @@
 package movieeditor
 
-import be.doeraene.webcomponents.ui5.configkeys.{ButtonDesign, IconName}
-import be.doeraene.webcomponents.ui5.{Button, Dialog, Slider, StepInput}
+import be.doeraene.webcomponents.ui5.configkeys.{ButtonDesign, IconName, TagDesign}
+import be.doeraene.webcomponents.ui5.{Button, Card, Dialog, Icon, Label, Slider, StepInput, Tag, Text, ToggleButton}
 import com.raquo.laminar.api.L.*
 import data.images.ImageData
 import com.raquo.laminar.codecs.StringAsIsCodec
@@ -29,13 +29,10 @@ object MovieDisplay {
 
     val mouseMoveBus = new EventBus[dom.MouseEvent]
 
-    val imagesPerSecond = 1
-    val playingVar      = Var(false)
+    val scrollPositionVar = Var(0)
 
     def toggleSelectIndexObserver: Observer[Int] =
       selectedIndices.updater((indices, index) => if indices.contains(index) then indices - index else indices + index)
-
-    val scrollPositionVar = Var(0)
 
     def imageClickObserver(index: Int) = Observer[Set[ClickModifier]] { modifiers =>
       if modifiers.isEmpty then
@@ -58,60 +55,85 @@ object MovieDisplay {
       }
     }
 
-    div(
-      manipulateSelectionComponent(movieId, selectedIndices, imagesSignal),
-      div(
-        className     := "images-box",
-        width.percent := 100,
-        overflow.hidden,
+    Card.of(
+      // ui5-card defaults to display:inline-block, which shrink-to-fits its content instead of being capped by
+      // its container; since the filmstrip below can grow arbitrarily wide, that growth would otherwise propagate
+      // straight out to the whole page. Forcing it to a block box pinned to 100% width keeps it capped.
+      _ => display.block,
+      _ => width.percent := 100,
+      _ => boxSizing.borderBox,
+      _.slots.header := Card.header.of(
+        _.titleText := "Storyboard",
+        _.subtitleText <-- imagesSignal.map(images => s"${images.length} image${if images.length > 1 then "s" else ""}")
+      ),
+      _ =>
         div(
-          className := "images-strip",
+          padding.px       := 16,
           display.flex,
-          width := "max-content",
-          children <-- imagesSignal
-            .combineWith(selectedIndices.signal)
-            .map((images, selected) =>
-              images.zipWithIndex
-                .map((image, index) => displayImage(index, image, selected.contains(index), imageClickObserver(index)))
-            ),
-          onMountBind { ctx =>
-            val el     = ctx.thisNode.ref
-            val parent = el.parentElement
+          flexDirection.column,
+          gap.px           := 16,
 
-            def containerWidth = parent.getBoundingClientRect().width
-            def stripWidth     = el.getBoundingClientRect().width
+          manipulateSelectionComponent(movieId, selectedIndices, imagesSignal),
 
-            def maxScroll = (stripWidth - containerWidth).max(0.0)
+          div(
+            className     := "smlab-filmstrip-box",
+            borderRadius.px := 8,
+            width.percent := 100,
+            overflow.hidden,
+            backgroundColor := "var(--sapList_Background, transparent)",
+            div(
+              className := "smlab-filmstrip-track",
+              display.flex,
+              gap.px    := 8,
+              padding.px := 4,
+              width     := "max-content",
+              children <-- imagesSignal
+                .combineWith(selectedIndices.signal)
+                .map((images, selected) =>
+                  images.zipWithIndex
+                    .map((image, index) =>
+                      displayImage(index, image, selected.contains(index), imageClickObserver(index))
+                    )
+                ),
+              onMountBind { ctx =>
+                val el     = ctx.thisNode.ref
+                val parent = el.parentElement
 
-            transform <-- scrollPositionVar.signal
-              .combineWithFn(imagesSignal.map(_.length))((scroll, imageCount) =>
-                (scroll * 1.0 / imageCount.max(1)).min(1.0)
-              )
-              .map(scroll => s"translateX(-${scroll * maxScroll}px)")
-          },
-          screenResizeBus.events
-            .delay()
-            .debounce(25)
-            .sample(scrollPositionVar.signal) --> scrollPositionVar.writer
+                def containerWidth = parent.getBoundingClientRect().width
+                def stripWidth     = el.getBoundingClientRect().width
+
+                def maxScroll = (stripWidth - containerWidth).max(0.0)
+
+                transform <-- scrollPositionVar.signal
+                  .combineWithFn(imagesSignal.map(_.length))((scroll, imageCount) =>
+                    (scroll * 1.0 / imageCount.max(1)).min(1.0)
+                  )
+                  .map(scroll => s"translateX(-${scroll * maxScroll}px)")
+              },
+              screenResizeBus.events
+                .delay()
+                .debounce(25)
+                .sample(scrollPositionVar.signal) --> scrollPositionVar.writer
+            )
+          ),
+          scrollBar(scrollPositionVar, imagesSignal.map(_.length)),
+          displayBigImage(scrollPositionVar.signal, imagesSignal),
+          playStopButtons(
+            scrollPositionVar.updater[Unit]((current, _) => current + 1),
+            scrollPositionVar.signal.combineWithFn(imagesSignal.map(_.length))(_ >= _)
+          ),
+          onMouseMove --> mouseMoveBus.writer,
+          onMountUnmountCallbackWithState(
+            { _ =>
+              val listener: js.Function1[dom.UIEvent, Any] = _ => screenResizeBus.writer.onNext(())
+              dom.document.defaultView.addEventListener("resize", listener)
+              listener
+            },
+            { (_, maybeListener) =>
+              maybeListener.foreach(dom.document.defaultView.removeEventListener("resize", _))
+            }
+          )
         )
-      ),
-      scrollBar(scrollPositionVar, imagesSignal.map(_.length)),
-      displayBigImage(scrollPositionVar.signal, imagesSignal),
-      playStopButtons(
-        scrollPositionVar.updater[Unit]((current, _) => current + 1),
-        scrollPositionVar.signal.combineWithFn(imagesSignal.map(_.length))(_ >= _)
-      ),
-      onMouseMove --> mouseMoveBus.writer,
-      onMountUnmountCallbackWithState(
-        { _ =>
-          val listener: js.Function1[dom.UIEvent, Any] = _ => screenResizeBus.writer.onNext(())
-          dom.document.defaultView.addEventListener("resize", listener)
-          listener
-        },
-        { (_, maybeListener) =>
-          maybeListener.foreach(dom.document.defaultView.removeEventListener("resize", _))
-        }
-      )
     )
 
   }
@@ -131,32 +153,22 @@ object MovieDisplay {
         .filter(identity)
         .mapTo(false) --> playingVar.writer,
       display.flex,
-      gap.px := 8,
-      Button.of(
-        _.iconOnly := true,
-        _.icon     := IconName.play,
-        _.disabled <-- playingVar.signal,
-        _.events.onClick.mapTo(true) --> playingVar.writer
+      alignItems.center,
+      gap.px := 12,
+      ToggleButton.of(
+        _.pressed <-- playingVar.signal,
+        _.icon <-- playingVar.signal.map(if _ then IconName.pause else IconName.play),
+        _.tooltip <-- playingVar.signal.map(if _ then "Mettre en pause" else "Lire le film"),
+        _.events.onClick.mapToUnit --> playingVar.invertWriter
       ),
-      Button.of(
-        _.iconOnly := true,
-        _.icon     := IconName.pause,
-        _.disabled <-- playingVar.signal.invert,
-        _.events.onClick.mapTo(false) --> playingVar.writer
-      ),
-      span(
-        display.inlineFlex,
-        justifyContent.center,
-        gap.px := 8,
-        "Images par seconde",
-        StepInput.of(
-          _.min  := 1.0,
-          _.max  := 24.0,
-          _.step := 1.0,
-          _.value <-- imagesPerSecond.signal.map(_.toDouble),
-          _.events.onChange.map(_.target.value.toInt) --> imagesPerSecond.writer,
-          _ => width.px := 50
-        )
+      Label.of(_ => "Images par seconde"),
+      StepInput.of(
+        _.min  := 1.0,
+        _.max  := 24.0,
+        _.step := 1.0,
+        _.value <-- imagesPerSecond.signal.map(_.toDouble),
+        _.events.onChange.map(_.target.value.toInt) --> imagesPerSecond.writer,
+        _ => width.px := 70
       )
     )
   }
@@ -165,9 +177,10 @@ object MovieDisplay {
     div(
       width.percent := 100,
       Slider.of(
-        _.min := 0.0,
+        _.min           := 0.0,
         _.max <-- imageCountSignal.map(_ - 1).map(_.toDouble),
-        _.step := 1.0,
+        _.step          := 1.0,
+        _.showTickmarks := true,
         _.value <-- scrollPositionVar.signal.map(_.toDouble),
         _.events.onInput.map(_.target.value.toInt) --> scrollPositionVar.writer
       )
@@ -182,16 +195,52 @@ object MovieDisplay {
         Option.when(images.nonEmpty)(images(index.min(images.length - 1)))
       )
 
+    val frameLabelSignal =
+      imagesSignal.map(_.length).combineWithFn(scrollPositionSignal)((count, index) =>
+        if count == 0 then None else Some(s"${index.min(count - 1) + 1} / $count")
+      )
+
     div(
+      className       := "smlab-framed",
+      position.relative,
+      width.percent   := 100,
+      minHeight.px    := 300,
+      display.flex,
+      alignItems.center,
+      justifyContent.center,
+      backgroundColor := "var(--sapList_Background, #eee)",
       child <-- currentImageSignal.map {
         case Some(image) =>
           img(
-            height.px := 500,
-            src       := imagesService.imageUrl(image)
+            cls("smlab-fade-in"),
+            height.px                              := 500,
+            maxWidth.percent                       := 100,
+            htmlAttr("object-fit", StringAsIsCodec) := "contain",
+            src                                     := imagesService.imageUrl(image)
           )
         case None =>
-          div("Waiting for images...")
-      }
+          div(
+            padding.px := 48,
+            display.flex,
+            flexDirection.column,
+            alignItems.center,
+            gap.px     := 8,
+            opacity    := 0.5,
+            Icon.of(_.name := IconName.camera),
+            Text("En attente d'images...")
+          )
+      },
+      child.maybe <-- frameLabelSignal.map(
+        _.map(label =>
+          Tag.of(
+            _.design := TagDesign.Neutral,
+            _ => position.absolute,
+            _ => top.px    := 8,
+            _ => left.px   := 8,
+            _ => label
+          )
+        )
+      )
     )
   }
 
@@ -202,11 +251,17 @@ object MovieDisplay {
       selectObserver: Observer[Set[ClickModifier]]
   )(using imagesService: ImagesService): HtmlElement = {
     div(
-      border      := "4px solid",
-      borderColor := (if selected then "#2196f3" else "transparent"),
+      className     := "smlab-thumb",
+      cls("smlab-thumb--selected") := selected,
+      borderRadius.px := 8,
+      border          := "3px solid transparent",
+      overflow.hidden,
+      flexShrink      := 0.0,
       img(
         src                                     := imagesService.imageUrl(data),
         height.px                               := 100,
+        width.px                                := 100,
+        display.block,
         htmlAttr("object-fit", StringAsIsCodec) := "cover"
       ),
       onClick.preventDefault.map(event =>
@@ -237,8 +292,8 @@ object MovieDisplay {
       Vector[Mod[HtmlElement]](
         Button.of(
           _.disabled <-- noSelectionSignal,
-          _.iconOnly := true,
           _.icon     := IconName.delete,
+          _ => "Supprimer",
           _.design   := ButtonDesign.Negative,
           _.events.onClick.mapToUnit --> deleteClickBus.writer
         ),
@@ -257,6 +312,7 @@ object MovieDisplay {
           _.slots.footer := div(
             display.flex,
             alignItems.end,
+            gap.px := 8,
             Button.of(
               _.design := ButtonDesign.Negative,
               _ => "Supprimer",
@@ -295,8 +351,8 @@ object MovieDisplay {
       Vector[Mod[HtmlElement]](
         Button.of(
           _.disabled <-- noSelectionSignal,
-          _.iconOnly := true,
           _.icon     := IconName.duplicate,
+          _ => "Dupliquer",
           _.events.onClick.mapToUnit --> duplicateSelectedBus.writer
         ),
         duplicateSelectedBus.events
@@ -326,12 +382,14 @@ object MovieDisplay {
           _.disabled <-- noSelectionSignal,
           _.iconOnly := true,
           _.icon     := IconName.`arrow-left`,
+          _.tooltip  := "Déplacer vers la gauche",
           _.events.onClick.mapTo(MoveDirection.Left) --> moveSelectedBus.writer
         ),
         Button.of(
           _.disabled <-- noSelectionSignal,
           _.iconOnly := true,
           _.icon     := IconName.`arrow-right`,
+          _.tooltip  := "Déplacer vers la droite",
           _.events.onClick.mapTo(MoveDirection.Right) --> moveSelectedBus.writer
         ),
         Dialog.of(
@@ -386,20 +444,32 @@ object MovieDisplay {
 
     div(
       display.flex,
-      gap.px := 8,
-      delButtonMods,
-      duplicateMods,
-      moveMods
+      alignItems.center,
+      justifyContent.spaceBetween,
+      flexWrap.wrap,
+      gap.px := 12,
+      div(
+        minHeight.px := 22,
+        child.maybe <-- selectedIndicesVar.signal.map(selected =>
+          Option.when(selected.nonEmpty)(
+            Tag.of(
+              _.design := TagDesign.Information,
+              _ => s"${selected.size} sélectionnée${if selected.size > 1 then "s" else ""}"
+            )
+          )
+        )
+      ),
+      div(
+        display.flex,
+        gap.px := 8,
+        delButtonMods,
+        duplicateMods,
+        moveMods
+      )
     )
   }
 
   private enum ClickModifier:
     case Shift, Control
-
-//  def testElement(): HtmlElement = {
-//    val images = Var((0 until 20).toVector.map(utils.createTestImage(_, 20)).map(ImageData(_)))
-//
-//    apply(images.signal, images.writer)
-//  }
 
 }
