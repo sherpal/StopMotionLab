@@ -1,7 +1,7 @@
 package movieeditor
 
-import be.doeraene.webcomponents.ui5.configkeys.{BarDesign, ButtonDesign, IconName, MessageStripDesign, TagDesign}
-import be.doeraene.webcomponents.ui5.{Bar, Button, BusyIndicator, Card, Icon, MessageStrip, Tag, Text}
+import be.doeraene.webcomponents.ui5.configkeys.{BarDesign, ButtonDesign, IconName, MessageStripDesign, TagDesign, ValueState}
+import be.doeraene.webcomponents.ui5.{Bar, Button, BusyIndicator, Card, Dialog, Icon, Input, MessageStrip, Tag, Text}
 import com.raquo.laminar.api.L.*
 import communication.webrtc.WebRTCCommProtocol
 import communication.ComputerMessage
@@ -67,6 +67,75 @@ object ComputerApp {
         _ => child.text <-- websocket.isOpenSignal.map(if _ then "Connecté" else "Connexion…")
       )
 
+    //noinspection MutatorLikeMethodIsParameterless
+    def deleteMovieSection: HtmlElement = {
+      val deleteClickBus = new EventBus[Unit]
+      val closeDialogBus = new EventBus[Unit]
+      val confirmBus     = new EventBus[Unit]
+      val typedNameVar   = Var("")
+
+      val matchesSignal: Signal[Boolean] =
+        typedNameVar.signal.combineWithFn(movieVar.signal.map(_.name))(_ == _)
+
+      div(
+        Button.of(
+          _.iconOnly := true,
+          _.icon     := IconName.delete,
+          _.design   := ButtonDesign.Negative,
+          _.tooltip  := "Supprimer ce film",
+          _.events.onClick.preventDefault.mapToUnit --> deleteClickBus.writer
+        ),
+        Dialog.of(
+          _.showFromEvents(deleteClickBus.events.mapToUnit),
+          _.closeFromEvents(closeDialogBus.events),
+          _.headerText := "Supprimer ce film",
+          // reset the typed text every time the dialog is (re)opened, so a leftover match from a previous,
+          // cancelled attempt can't leave the button armed by accident.
+          _ => deleteClickBus.events.mapTo("") --> typedNameVar.writer,
+          _ =>
+            sectionTag(
+              display.flex,
+              flexDirection.column,
+              gap.px := 12,
+              p(
+                child.text <-- movieVar.signal.map(m =>
+                  s"""Cette action est irréversible. Pour confirmer, tape le nom du film ci-dessous : « ${m.name} »"""
+                )
+              ),
+              Input.of(
+                _.value <-- typedNameVar.signal,
+                _.placeholder <-- movieVar.signal.map(_.name),
+                _.valueState <-- matchesSignal.combineWithFn(typedNameVar.signal.map(_.isEmpty))((matches, empty) =>
+                  if empty then ValueState.None else if matches then ValueState.Positive else ValueState.Negative
+                ),
+                _.events.onInput.map(_.target.value) --> typedNameVar.writer
+              )
+            ),
+          _.slots.footer := div(
+            display.flex,
+            alignItems.end,
+            gap.px := 8,
+            Button.of(
+              _.design   := ButtonDesign.Negative,
+              _.disabled <-- matchesSignal.invert,
+              _ => "Supprimer définitivement",
+              _.events.onClick.mapToUnit --> Observer.combine(closeDialogBus.writer, confirmBus.writer)
+            ),
+            Button.of(
+              _.design := ButtonDesign.Transparent,
+              _ => "Annuler",
+              _.events.onClick.mapToUnit --> closeDialogBus.writer
+            )
+          )
+        ),
+        confirmBus.events
+          .flatMapSwitch(_ => EventStream.fromFuture(movieService.deleteWithRetries(movieId)))
+          .collect { case true => () } --> Observer[Unit](_ =>
+          Router.router.moveTo("/" ++ (base / entry.DefinedRoutes.home).createPath())
+        )
+      )
+    }
+
     def headerBar: HtmlElement =
       Bar.of(
         _.design := BarDesign.Header,
@@ -85,7 +154,13 @@ object ComputerApp {
               .filter(_.nonEmpty)
               .contramap[String](_.trim)
           ),
-        _.slots.endContent := statusTag
+        _.slots.endContent := div(
+          display.flex,
+          alignItems.center,
+          gap.px := 8,
+          statusTag,
+          deleteMovieSection
+        )
       )
 
     def connectSection: HtmlElement =
