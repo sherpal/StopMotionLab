@@ -12,7 +12,7 @@ import be.doeraene.utils.testshenanigans.OnlyInTest
 import io.circe.{Encoder, Json}
 import scalasql.simple.SqliteDialect
 
-import scala.concurrent.duration.Duration
+import scala.concurrent.duration.{Duration, DurationInt}
 import scala.concurrent.{Await, Future, Promise}
 
 class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingService)(using castor.Context) {
@@ -76,6 +76,19 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
 
   val projectionHandle: ProjectionRunner.ProjectionHandle =
     eventSourcing.registerProjection(entityInfo, movieProjection)
+
+  private val deletedMovieProjection: Projection[Movie.Event] =
+    Projection("deleted-movie-proj", Projection.Semantics.AtLeastOnce) { (movieId, envelope) =>
+      envelope.event match {
+        case Event.Deleted(_) =>
+          val movie = Await.result(movieEntity(Movie.Id(movieId)).ask(Movie.Command.RawGet.apply), 10.seconds)
+          println(s"Movie ${movie.id} ${movie.name} has been added to the projection of deleted movies.")
+          db.setDeletedInfo(movie.id, movie.name)
+        case _ => () // nothing to do
+      }
+    }
+
+  val _ = eventSourcing.registerProjection(entityInfo, deletedMovieProjection)
 
   def moviesMetadata: Vector[MovieMetadata] = db.movies.map { dbMovie =>
     MovieMetadata(dbMovie.typedId, dbMovie.name, dbMovie.lastUpdateAt)

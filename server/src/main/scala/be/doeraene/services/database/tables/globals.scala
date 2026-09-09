@@ -25,6 +25,9 @@ object Movie extends SimpleTable[Movie] {
   }
 }
 
+case class DeletedMovie(id: Int, name: String)
+object DeletedMovie extends SimpleTable[DeletedMovie]
+
 case class Image(uuid: java.util.UUID, contentType: ImageData.MimeType, image: Array[Byte], lastUpdateAt: Long):
   override def equals(obj: Any): Boolean = obj match {
     case that: Image =>

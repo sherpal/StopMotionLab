@@ -25,6 +25,13 @@ create table movie (
     last_update_at   integer not null
 );
 
+create table deleted_movie (
+    id   integer not null,
+    name text not null
+);
+
+create index deleted_movie_index on deleted_movie (name);
+
 create table image (
     uuid           text not null primary key,
     content_type   text,

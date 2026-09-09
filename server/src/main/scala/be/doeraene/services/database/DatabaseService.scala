@@ -59,6 +59,12 @@ class DatabaseService(dataDirectory: Path, inTest: Boolean = false) {
     db.run(Movie.delete(_.id === movieId.value))
   }
 
+  def setDeletedInfo(movieId: Movie.Id, movieName: String): Unit = client.transaction { db =>
+    val exists = db.run(DeletedMovie.select.filter(_.id === movieId.value).take(1)).nonEmpty
+    if exists then db.run(DeletedMovie.delete(_.id === movieId.value))
+    db.run(DeletedMovie.insert.values(DeletedMovie(movieId.value, movieName)))
+  }
+
   def getMovie(id: Int): Option[Movie] =
     db.run(Movie.select.filter(_.id === id).take(1)).headOption
 
