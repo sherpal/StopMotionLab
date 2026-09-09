@@ -1,6 +1,13 @@
 package movieeditor
 
-import be.doeraene.webcomponents.ui5.configkeys.{BarDesign, ButtonDesign, IconName, MessageStripDesign, TagDesign, ValueState}
+import be.doeraene.webcomponents.ui5.configkeys.{
+  BarDesign,
+  ButtonDesign,
+  IconName,
+  MessageStripDesign,
+  TagDesign,
+  ValueState
+}
 import be.doeraene.webcomponents.ui5.{Bar, Button, BusyIndicator, Card, Dialog, Icon, Input, MessageStrip, Tag, Text}
 import com.raquo.laminar.api.L.*
 import communication.webrtc.WebRTCCommProtocol
@@ -56,7 +63,9 @@ object ComputerApp {
 
     // Only worth showing the QR code while nobody is connected yet.
     val showQrIdSignal: Signal[Option[String]] =
-      editorIdVar.signal.combineWithFn(currentProviderIdVar.signal)((id, provider) => if provider.isEmpty then id else None)
+      editorIdVar.signal.combineWithFn(currentProviderIdVar.signal)((id, provider) =>
+        if provider.isEmpty then id else None
+      )
 
     def statusTag: HtmlElement =
       Tag.of(
@@ -67,7 +76,7 @@ object ComputerApp {
         _ => child.text <-- websocket.isOpenSignal.map(if _ then "Connecté" else "Connexion…")
       )
 
-    //noinspection MutatorLikeMethodIsParameterless
+    // noinspection MutatorLikeMethodIsParameterless
     def deleteMovieSection: HtmlElement = {
       val deleteClickBus = new EventBus[Unit]
       val closeDialogBus = new EventBus[Unit]
@@ -99,7 +108,7 @@ object ComputerApp {
               gap.px := 12,
               p(
                 child.text <-- movieVar.signal.map(m =>
-                  s"""Cette action est irréversible. Pour confirmer, tape le nom du film ci-dessous : « ${m.name} »"""
+                  s"""Pour confirmer, tape le nom du film ci-dessous : « ${m.name} »"""
                 )
               ),
               Input.of(
@@ -109,6 +118,9 @@ object ComputerApp {
                   if empty then ValueState.None else if matches then ValueState.Positive else ValueState.Negative
                 ),
                 _.events.onInput.map(_.target.value) --> typedNameVar.writer
+              ),
+              p(
+                small("You can recover a deleted movie from the home menu.")
               )
             ),
           _.slots.footer := div(
@@ -116,7 +128,7 @@ object ComputerApp {
             alignItems.end,
             gap.px := 8,
             Button.of(
-              _.design   := ButtonDesign.Negative,
+              _.design := ButtonDesign.Negative,
               _.disabled <-- matchesSignal.invert,
               _ => "Supprimer définitivement",
               _.events.onClick.mapToUnit --> Observer.combine(closeDialogBus.writer, confirmBus.writer)
@@ -130,7 +142,8 @@ object ComputerApp {
         ),
         confirmBus.events
           .flatMapSwitch(_ => EventStream.fromFuture(movieService.deleteWithRetries(movieId)))
-          .collect { case true => () } --> Observer[Unit](_ =>
+          .collect { case true => () } // delay a bit to let projection have a chance to run
+          .delay(300) --> Observer[Unit](_ =>
           Router.router.moveTo("/" ++ (base / entry.DefinedRoutes.home).createPath())
         )
       )
@@ -138,7 +151,7 @@ object ComputerApp {
 
     def headerBar: HtmlElement =
       Bar.of(
-        _.design := BarDesign.Header,
+        _.design             := BarDesign.Header,
         _.slots.startContent := Button.of(
           _.iconOnly := true,
           _.icon     := IconName.home,
@@ -181,7 +194,7 @@ object ComputerApp {
             display.flex,
             flexDirection.column,
             alignItems.center,
-            gap.px     := 12,
+            gap.px       := 12,
             minHeight.px := 200,
             child <-- showQrIdSignal.combineWithFn(currentProviderIdVar.signal) {
               case (Some(id), _) =>
@@ -265,7 +278,7 @@ object ComputerApp {
             padding.px := 16,
             display.flex,
             flexDirection.column,
-            gap.px     := 12,
+            gap.px := 12,
             child.maybe <-- burstActive.signal.map(
               Option.when(_)(
                 MessageStrip.of(
@@ -281,13 +294,13 @@ object ComputerApp {
               flexWrap.wrap,
               gap.px := 12,
               Button.of(
-                _.icon   := IconName.camera,
+                _.icon := IconName.camera,
                 _ => "Prendre une photo",
                 _.disabled <-- websocket.isOpenSignal.invert.combineWithFn(burstActive.signal)(_ || _),
                 _.events.onClick.preventDefault.mapToUnit --> askPictureBus.writer
               ),
               Button.of(
-                _.icon   := IconName.video,
+                _.icon := IconName.video,
                 _ => "Créer le film",
                 _.design := ButtonDesign.Emphasized,
                 _.disabled <-- movieVar.signal
@@ -362,7 +375,7 @@ object ComputerApp {
 
     div(
       display <-- initiallyLoaded.map(if _ then "block" else "none"),
-      padding.px      := 16,
+      padding.px := 16,
       boxSizing.borderBox,
       display.flex,
       flexDirection.column,
