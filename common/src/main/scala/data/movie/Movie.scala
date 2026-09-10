@@ -62,6 +62,7 @@ object Movie {
     case ChangeName(newName: String, replyTo: castor.Actor[Boolean])
     case Get(replyTo: castor.Actor[Option[Movie]])
     case Delete(replyTo: castor.Actor[Boolean])
+    case Restore(replyTo: castor.Actor[Boolean])
     case RawGet(replyTo: castor.Actor[Movie])
     case AddImage(imageId: ImageData.Id, replyTo: castor.Actor[Boolean])
     case RemoveImages(toRemove: Vector[(ImageData.Id, Int)], replyTo: castor.Actor[Boolean])
@@ -83,6 +84,9 @@ object Movie {
           Effect.ReplyTo(replyTo, movie => Option.when(movie.active)(movie))
         case Delete(replyTo) =>
           if state.active then Effect.Persist(Event.Deleted(now())).thenReply(replyTo)(_ => true)
+          else Effect.ReplyTo(replyTo, _ => false)
+        case Restore(replyTo) =>
+          if state.deleted then Effect.Persist(Event.Restored(now())).thenReply(replyTo)(_ => true)
           else Effect.ReplyTo(replyTo, _ => false)
         case RawGet(replyTo) =>
           Effect.ReplyTo(replyTo, identity)
@@ -125,6 +129,7 @@ object Movie {
     case Created(id: Id, at: Long)
     case NameChanged(newName: String)
     case Deleted(at: Long)
+    case Restored(at: Long)
     case ImageAdded(imageId: ImageData.Id, atIndex: Int)
     case ImagesRemoved(toRemove: Vector[(ImageData.Id, Int)])
     case ImagesDuplicated(toDuplicate: Vector[(ImageData.Id, Int)])
@@ -140,6 +145,8 @@ object Movie {
         movie.copy(name = newName)
       case Deleted(at) =>
         movie.copy(deletedAt = at)
+      case Restored(_) =>
+        movie.copy(deletedAt = 0L)
       case ImageAdded(imageId, atIndex) =>
         val data      = Movie.ImageDataWithOrdering(ImageData(imageId), Some(atIndex))
         val newImages = movie.images :+ data

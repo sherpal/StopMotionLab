@@ -65,6 +65,27 @@ class DatabaseService(dataDirectory: Path, inTest: Boolean = false) {
     db.run(DeletedMovie.insert.values(DeletedMovie(movieId.value, movieName)))
   }
 
+  def deletedMovies: Vector[DeletedMovie] =
+    db.run(DeletedMovie.select).toVector
+
+  /** Forgets that this movie was ever deleted -- called once it's been restored. */
+  def clearDeletedInfo(movieId: Movie.Id): Unit =
+    db.run(DeletedMovie.delete(_.id === movieId.value))
+
+  /** Re-creates the `movie_to_image` links for a movie that's being restored (its row, and the links themselves, were
+    * hard-deleted by [[deleteMovie]]). Only images still carrying an index are relinked -- an image the user had
+    * removed from the movie before it was deleted (tracked with `maybeIndex = None`) stays unlinked, exactly as it
+    * was.
+    */
+  def reattachMovieImages(movieId: Movie.Id, images: Vector[data.movie.Movie.ImageDataWithOrdering]): Unit =
+    client.transaction { db =>
+      images.foreach {
+        case data.movie.Movie.ImageDataWithOrdering(imageData, Some(index)) =>
+          db.run(MovieToImage.insert.values(MovieToImage(movieId.value, imageData.id.uuidValue, Some(index))))
+        case data.movie.Movie.ImageDataWithOrdering(_, None) => // was removed from the movie before deletion; stays that way
+      }
+    }
+
   def getMovie(id: Int): Option[Movie] =
     db.run(Movie.select.filter(_.id === id).take(1)).headOption
 

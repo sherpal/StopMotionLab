@@ -3,6 +3,8 @@ package data.movie
 import data.images.ImageData
 import eventsourcing.Effect
 
+import scala.collection.mutable
+
 /** Pure tests of `Movie.Command.handle`/`Movie.Event.apply`: no actor system, event store or bridge involved -- both
   * are plain functions (`(Command, Movie, Int) => Effect[Event, Movie]` and `(Event, Movie) => Movie`), so a command
   * can be run against a hand-built `Movie` and checked directly, using [[interpret]] to play out the returned `Effect`
@@ -26,7 +28,7 @@ class MovieCommandTest extends munit.FunSuite {
 
   /** Records every reply it's sent -- good enough here since nothing under test needs a live `castor.Context`. */
   private class RecordingActor[T] extends castor.Actor[T] {
-    val received = scala.collection.mutable.ArrayBuffer.empty[T]
+    val received: mutable.Seq[T] = scala.collection.mutable.ArrayBuffer.empty[T]
 
     def send(t: T)(using fileName: sourcecode.FileName, line: sourcecode.Line): Unit = received += t
 
@@ -143,6 +145,62 @@ class MovieCommandTest extends munit.FunSuite {
 
     assertEquals(after, notYetCreated)
     assertEquals(replyTo.received.toVector, Vector(false))
+  }
+
+  // -- Restore ----------------------------------------------------------------------------------------------------
+
+  test("Restore persists Restored and replies true, on a deleted movie") {
+    val deleted = activeMovie().copy(deletedAt = 2L)
+    val replyTo = RecordingActor[Boolean]()
+
+    val after = run(Movie.Command.Restore(replyTo), deleted)
+
+    assert(!after.deleted)
+    assert(after.active, "created and no longer deleted: active again")
+    assertEquals(replyTo.received.toVector, Vector(true))
+  }
+
+  test("Restore is rejected, replying false and changing nothing, on a movie that isn't deleted") {
+    val active  = activeMovie()
+    val replyTo = RecordingActor[Boolean]()
+
+    val after = run(Movie.Command.Restore(replyTo), active)
+
+    assertEquals(after, active)
+    assertEquals(replyTo.received.toVector, Vector(false))
+  }
+
+  test("Restore is rejected, replying false, on a movie that was never created") {
+    val notYetCreated = Movie.entityInfo.initialState
+    val replyTo        = RecordingActor[Boolean]()
+
+    val after = run(Movie.Command.Restore(replyTo), notYetCreated)
+
+    assertEquals(after, notYetCreated)
+    assertEquals(replyTo.received.toVector, Vector(false))
+  }
+
+  test("Restore brings back the images and name the movie had when it was deleted") {
+    val (id0, img0) = freshImage(0)
+    val (id1, img1) = freshImage(1)
+    val deleted     = activeMovie(Vector(img0, img1)).copy(name = "Holiday reel", deletedAt = 2L)
+    val replyTo     = RecordingActor[Boolean]()
+
+    val after = run(Movie.Command.Restore(replyTo), deleted)
+
+    assertEquals(after.name, "Holiday reel")
+    assert(after.containsImage(id0, 0))
+    assert(after.containsImage(id1, 1))
+  }
+
+  test("Delete then Restore round-trips back to the exact same active state") {
+    val movie        = activeMovie()
+    val deleteReply  = RecordingActor[Boolean]()
+    val deleted      = run(Movie.Command.Delete(deleteReply), movie)
+    val restoreReply = RecordingActor[Boolean]()
+    val restored     = run(Movie.Command.Restore(restoreReply), deleted)
+
+    assertEquals(restored, movie, "deletedAt round-trips back to 0, the rest was never touched")
   }
 
   // -- RemoveImages -----------------------------------------------------------------------------------------------

@@ -14,6 +14,9 @@ class MoviesRoutes(using moviesService: MoviesService)(using
   @cask.get("api/movies/all")
   def movies() = json(moviesService.moviesMetadata)
 
+  @cask.get("api/movies/deleted")
+  def deletedMovies() = json(moviesService.deletedMoviesMetadata)
+
   @cask.post("api/movies/create")
   def createMovie() = json {
     val id = moviesService.create()

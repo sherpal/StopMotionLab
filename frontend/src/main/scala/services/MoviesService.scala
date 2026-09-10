@@ -2,7 +2,7 @@ package services
 
 import be.doeraene.utils.castorutils.BottleNeckActor
 import com.raquo.laminar.api.A.*
-import data.movie.{Movie, MovieMetadata}
+import data.movie.{DeletedMovieMetadata, Movie, MovieMetadata}
 import io.circe.Codec
 import urldsl.language.dummyErrorImpl.*
 import utils.websocket.CommandBridgeClient
@@ -31,6 +31,9 @@ class MoviesService(using
 
   def movies: Future[Vector[MovieMetadata]] = httpClient.get[Vector[MovieMetadata]](moviesPath / "all")
 
+  def deletedMovies: Future[Vector[DeletedMovieMetadata]] =
+    httpClient.get[Vector[DeletedMovieMetadata]](moviesPath / "deleted")
+
   def create(): Future[Movie.Id] = httpClient.post[Movie.Id](moviesPath / "create", ignore)(())
 
   def movieF(id: Movie.Id): Future[Option[Movie]] =
@@ -51,6 +54,12 @@ class MoviesService(using
 
   def deleteWithRetries(id: Movie.Id): Future[Boolean] =
     movieEntity(id).forcePass(Movie.Command.Delete.apply)
+
+  def restore(id: Movie.Id): Future[Option[Boolean]] =
+    movieEntity(id).passIfPossible(Movie.Command.Restore.apply)
+
+  def restoreWithRetries(id: Movie.Id): Future[Boolean] =
+    movieEntity(id).forcePass(Movie.Command.Restore.apply)
 
   def sendCommand[Reply](id: Movie.Id, command: castor.Actor[Reply] => Movie.Command): Future[Option[Reply]] =
     movieEntity(id).passIfPossible(command)

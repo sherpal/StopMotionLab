@@ -121,6 +121,44 @@ class MoviesServiceTest extends munit.FunSuite with HasTestPower {
     assertEquals(movies.moviesMetadata.length, 10)
   }
 
+  fixture.test("Deleting projects a movie into the deleted-movies list, and restoring it removes it again") {
+    (movies, _, _, _) =>
+      def pokeAndWait(handle: eventsourcing.ProjectionRunner.ProjectionHandle): Unit = {
+        handle.poke()
+        @tailrec
+        def waitUpToDate(): Unit = if !Await.result(handle.isUpToDate, Duration.create("1 second"))
+        then {
+          Thread.`yield`()
+          waitUpToDate()
+        }
+        waitUpToDate()
+      }
+      // both projections react to the same events (Deleted / Restored), so both need to catch up before asserting.
+      def pokeBothAndWait(): Unit = {
+        pokeAndWait(movies.projectionHandle)
+        pokeAndWait(movies.deletedMovieProjectionHandle)
+      }
+
+      val id = movies.create()
+      pokeBothAndWait()
+      assertEquals(movies.moviesMetadata.map(_.id), Vector(id))
+      assertEquals(movies.deletedMoviesMetadata, Vector.empty)
+
+      movies.delete(id)
+      pokeBothAndWait()
+      assertEquals(movies.moviesMetadata, Vector.empty, "gone from the active list")
+      assertEquals(
+        movies.deletedMoviesMetadata,
+        Vector(data.movie.DeletedMovieMetadata(id, "Untitled")),
+        "and tracked in the deleted list"
+      )
+
+      movies.restore(id)
+      pokeBothAndWait()
+      assertEquals(movies.moviesMetadata.map(_.id), Vector(id), "back in the active list")
+      assertEquals(movies.deletedMoviesMetadata, Vector.empty, "and its tombstone is gone")
+  }
+
   fixture.test("I can send a Movie command through the castorwire bridge and get the reply back") {
     (movies, _, ac, _) =>
       given castor.Context = ac

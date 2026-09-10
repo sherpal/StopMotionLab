@@ -3,7 +3,7 @@ package be.doeraene.services.movies
 import be.doeraene.services.database.DatabaseService
 import castor.SimpleActor
 import castorwire.{Bridge, CommandRouter}
-import data.movie.{Movie, MovieMetadata}
+import data.movie.{DeletedMovieMetadata, Movie, MovieMetadata}
 import eventsourcing.{Effect, EntityInformation, EventSourcingService, Projection, ProjectionRunner}
 import be.doeraene.utils.castorutils.ask
 import data.movie.Movie.Event
@@ -65,6 +65,15 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
         touchUpdateAt()
       case Event.Deleted(at) =>
         db.deleteMovie(Movie.Id(id))
+      case Event.Restored(_) =>
+        // deleteMovie hard-removed the movie row and its image links, so restoring means re-creating both from the
+        // live entity's state -- which is untouched, since deletion only ever marked the event-sourced actor as
+        // deleted, not the actor's own data.
+        val movie = Await.result(movieEntity(Movie.Id(id)).ask(Movie.Command.RawGet.apply), 10.seconds)
+        // just in case it was already there. In theory that can happen since the semantics is at least once.
+        db.getMovie(movie.id.value).foreach(_ => db.deleteMovie(movie.id))
+        db.createMovie(DBMovie(movie.id.value, movie.name, movie.createdAt, now()))
+        db.reattachMovieImages(movie.id, movie.images)
       case data.movie.Movie.Event.ImagesRemoved(_) =>
         touchUpdateAt()
       case data.movie.Movie.Event.ImagesDuplicated(_) =>
@@ -84,14 +93,21 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
           val movie = Await.result(movieEntity(Movie.Id(movieId)).ask(Movie.Command.RawGet.apply), 10.seconds)
           println(s"Movie ${movie.id} ${movie.name} has been added to the projection of deleted movies.")
           db.setDeletedInfo(movie.id, movie.name)
+        case Event.Restored(_) =>
+          db.clearDeletedInfo(Movie.Id(movieId))
         case _ => () // nothing to do
       }
     }
 
-  val _ = eventSourcing.registerProjection(entityInfo, deletedMovieProjection)
+  val deletedMovieProjectionHandle: ProjectionRunner.ProjectionHandle =
+    eventSourcing.registerProjection(entityInfo, deletedMovieProjection)
 
   def moviesMetadata: Vector[MovieMetadata] = db.movies.map { dbMovie =>
     MovieMetadata(dbMovie.typedId, dbMovie.name, dbMovie.lastUpdateAt)
+  }
+
+  def deletedMoviesMetadata: Vector[DeletedMovieMetadata] = db.deletedMovies.map { deletedMovie =>
+    DeletedMovieMetadata(Movie.Id(deletedMovie.id), deletedMovie.name)
   }
 
   def movieF(id: Movie.Id): Future[Option[Movie]] = movieEntity(id).ask(Movie.Command.Get.apply)
@@ -134,7 +150,14 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
 
   def delete(id: Movie.Id): Boolean = Await.result(deleteF(id), Duration.Inf)
 
+  def restoreF(id: Movie.Id): Future[Boolean] = movieEntity(id).ask(Movie.Command.Restore.apply)
+
+  def restore(id: Movie.Id): Boolean = Await.result(restoreF(id), Duration.Inf)
+
   private[movies] def pokeProjection()(using OnlyInTest): Unit =
     projectionHandle.poke()
+
+  private[movies] def pokeDeletedMovieProjection()(using OnlyInTest): Unit =
+    deletedMovieProjectionHandle.poke()
 
 }
