@@ -1,9 +1,9 @@
 package utils.websocket
 
+import castor.SimpleActor
 import castorwire.{Bridge, CommandFrame, WireMessage}
 import com.raquo.laminar.api.L.*
 import eventsourcing.{EntityKind, EntityUpdateNotification}
-import io.circe.syntax.*
 import io.circe.{Decoder, Encoder}
 import org.scalajs.dom
 
@@ -43,9 +43,12 @@ final class CommandBridgeClient(host: String = dom.document.location.host)(using
 
   socket.inEvents.foreach {
     case WireMessage.Reply(token, payload) => bridge.deliver(token, payload)
-    case _: WireMessage.Subscribe          => () // the server never subscribes to us (yet)
-    case _: WireMessage.UnSubscribe        => () // the server never unsubscribes to us (yet)
-    case WireMessage.Command(_)            => () // the server never pushes commands to us (yet)
+    // the server never sends any of the messages below (currently)
+    case _: WireMessage.Subscribe                 => ()
+    case _: WireMessage.UnSubscribe               => ()
+    case WireMessage.Command(_)                   => ()
+    case _: WireMessage.UnsubscribeFromProjection => ()
+    case _: WireMessage.SubscribeToProjection     => ()
   }(using unsafeWindowOwner)
 
   /** Connects the underlying websocket; safe to call once at app startup, mirroring `JsonWebSocket.open`. Outgoing
@@ -70,6 +73,39 @@ final class CommandBridgeClient(host: String = dom.document.location.host)(using
       def run(command: Command): Unit = sendCommand(kind.name, id, command)
     }
     EntityBridgeActor(id, kind)
+
+  def subscribeToProjection(projectionName: String): (updates: EventStream[Int], unsub: () => Unit) = {
+    val bus = new EventBus[Int]
+
+    val token = bridge.registerLocal(
+      new SimpleActor[Int]() {
+        override def run(entityId: Int): Unit = bus.writer.onNext(entityId)
+      },
+      oneShot = false
+    )
+
+    val cancel = () => {
+      bridge.unregister(token)
+      socket.outWriter.onNext(WireMessage.UnsubscribeFromProjection(token))
+    }
+
+    socket.outWriter.onNext(WireMessage.SubscribeToProjection(projectionName, token))
+
+    (updates = bus.events, unsub = cancel)
+  }
+
+  def subscribeToProjection(projectionName: String, observer: Observer[Int]): Mod[HtmlElement] =
+    onMountUnmountCallbackWithState(
+      { ctx =>
+        given Owner          = ctx.owner
+        val (updates, unsub) = subscribeToProjection(projectionName)
+        updates.foreach(observer.onNext)
+        unsub
+      },
+      { (_, maybeUnsub) =>
+        maybeUnsub.foreach(_())
+      }
+    )
 
   def subscribe[Entity](id: Int, kind: EntityKind[?, Entity])(using
       Decoder[Entity]

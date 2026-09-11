@@ -8,16 +8,13 @@ import services.MoviesService
 
 import scala.concurrent.ExecutionContext
 
-/** The icon button + dialog listing recently deleted movies and letting the user restore one. On success, the
-  * restored movie is dropped from the local deleted-list right away (rather than re-fetched, since the
-  * read-model projection needs a moment to catch up) and reported via `restoredObserver` so the caller can
-  * refresh its own movie list.
+/** The icon button + dialog listing recently deleted movies and letting the user restore one. On success, the restored
+  * movie is dropped from the local deleted-list right away (rather than re-fetched, since the read-model projection
+  * needs a moment to catch up) and reported via `restoredObserver` so the caller can refresh its own movie list.
   */
 object RestoreMovieDialog {
 
-  def apply(restoredObserver: Observer[Movie.Id])(using
-      moviesService: MoviesService
-  )(using ExecutionContext): HtmlElement = {
+  def apply()(using moviesService: MoviesService)(using ExecutionContext): HtmlElement = {
     val openClickBus      = new EventBus[Unit]
     val closeDialogBus    = new EventBus[Unit]
     val restoreClickBus   = new EventBus[Movie.Id]
@@ -37,7 +34,7 @@ object RestoreMovieDialog {
         borderBottom := "1px solid var(--sapList_BorderColor, #ddd)",
         span(deletedMovie.name),
         Button.of(
-          _.icon   := IconName.undo,
+          _.icon := IconName.undo,
           _ => "Restaurer",
           _.design := ButtonDesign.Emphasized,
           _.events.onClick.preventDefault.mapTo(deletedMovie.id) --> restoreClickBus.writer
@@ -103,8 +100,7 @@ object RestoreMovieDialog {
       restoreClickBus.events
         .flatMapSwitch(id => EventStream.fromFuture(moviesService.restoreWithRetries(id)).map(id -> _))
         .collect { case (id, true) => id } --> restoredBus.writer,
-      restoredBus.events --> deletedMoviesVar.updater[Movie.Id]((movies, id) => movies.filterNot(_.id == id)),
-      restoredBus.events --> restoredObserver
+      restoredBus.events --> deletedMoviesVar.updater[Movie.Id]((movies, id) => movies.filterNot(_.id == id))
     )
   }
 

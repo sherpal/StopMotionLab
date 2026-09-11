@@ -175,10 +175,13 @@ class MoviesServiceTest extends munit.FunSuite with HasTestPower {
       // websocket connection (see be.doeraene.routes.CommandRoutes for the real thing).
       var clientBridge: Bridge = null
       val serverBridge: Bridge = Bridge {
-        case WireMessage.Reply(token, payload) => clientBridge.deliver(token, payload)
-        case WireMessage.Subscribe(_, _, _)    => () // not tested here
-        case WireMessage.UnSubscribe(_)        => () // not tested here
-        case WireMessage.Command(_)            => () // the server never pushes commands to the client in this test
+        case WireMessage.Reply(token, payload)                   => clientBridge.deliver(token, payload)
+        case WireMessage.Subscribe(_, _, _)                      => () // not tested here
+        case WireMessage.UnSubscribe(_)                          => () // not tested here
+        case WireMessage.Command(_)                              => ()
+        case castorwire.WireMessage.SubscribeToProjection(_, _)  => ()
+        case castorwire.WireMessage.UnsubscribeFromProjection(_) =>
+          () // the server never pushes commands to the client in this test
       }
       clientBridge = Bridge(_ => ()) // the client never gets sent a Command frame here either
 

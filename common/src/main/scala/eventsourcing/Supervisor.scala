@@ -19,13 +19,24 @@ private[eventsourcing] class Supervisor(
 
     def send(update: EntityUpdateNotification[?]): Unit = update.state match {
       case t: T => ref.send(EntityUpdateNotification(t, update.sequenceNumber))
-      case _    => ()
+      case _    =>
+        // todo: better logging
+        println(s"Subscription was asked to send update of state ${update.state.getClass.getName}, which is weird.")
+        ()
     }
+  }
+
+  private case class ProjectionSubscription(
+      name: String,
+      ref: castor.Actor[Int]
+  ) {
+    def poke(entityId: Int): Unit = ref.send(entityId)
   }
 
   private class TheState(
       entities: Map[(id: Int, entityType: String), EntitySlot],
-      subscriptions: Map[(id: Int, entityType: String), Vector[Subscription[?]]]
+      subscriptions: Map[(id: Int, entityType: String), Vector[Subscription[?]]],
+      projectionSubscriptions: Map[String, Vector[ProjectionSubscription]]
   ) extends State({
         case commandEnvelope @ EntityCommand(id, entityInfo, command) =>
           val entityType = entityInfo.entityKind.name
@@ -57,18 +68,21 @@ private[eventsourcing] class Supervisor(
                   actor = actor.asInstanceOf[castor.Actor[eventsourcing.EventSourcedActor.ActorCommand[?]]],
                   lastAccessed = System.currentTimeMillis()
                 )),
-                subscriptions
+                subscriptions,
+                projectionSubscriptions
               )
             case Some(EntitySlot.Live(actor, _)) =>
               actor.send(EventSourcedActor.ActorCommand.Wrapper(command))
               TheState(
                 entities.updated((id, entityType), EntitySlot.Live(actor, System.currentTimeMillis())),
-                subscriptions
+                subscriptions,
+                projectionSubscriptions
               )
             case Some(EntitySlot.Passivating(commands)) =>
               TheState(
                 entities.updated((id, entityType), EntitySlot.Passivating(commands :+ commandEnvelope)),
-                subscriptions
+                subscriptions,
+                projectionSubscriptions
               )
           }
         case EntityIsNowPassive(id, entityType) =>
@@ -78,7 +92,7 @@ private[eventsourcing] class Supervisor(
             case Some(EntitySlot.Passivating(commands)) =>
               commands.foreach(send) // sending to self the waiting commands
           }
-          TheState(entities.removed((id, entityType)), subscriptions)
+          TheState(entities.removed((id, entityType)), subscriptions, projectionSubscriptions)
         case EntityUpdate(id, entityType, entity, sequenceNumber) =>
           subscriptions
             .getOrElse((id, entityType), Vector.empty)
@@ -90,7 +104,8 @@ private[eventsourcing] class Supervisor(
             subscriptions.updatedWith((id, entityType.name)) {
               case None           => Some(Vector(Subscription(name, ref, tp)))
               case Some(existing) => Some(existing :+ Subscription(name, ref, tp))
-            }
+            },
+            projectionSubscriptions
           )
         case Unsubscribe(id, entityType, name) =>
           TheState(
@@ -100,7 +115,8 @@ private[eventsourcing] class Supervisor(
               case Some(existing) =>
                 val filtered = existing.filterNot(_.name == name)
                 Option.when(filtered.nonEmpty)(filtered)
-            }
+            },
+            projectionSubscriptions
           )
         case CheckIdleEntities() =>
           val (idleEntities, activeEntities) = entities.partitionMap {
@@ -117,7 +133,8 @@ private[eventsourcing] class Supervisor(
           scheduleCheckIdleEntities()
           TheState(
             activeEntities.toMap ++ idleEntities.map((id, _) => (id, EntitySlot.Passivating(Vector.empty))),
-            subscriptions
+            subscriptions,
+            projectionSubscriptions
           )
         case ClearMemory() =>
           val newEntities = entities.map {
@@ -127,10 +144,31 @@ private[eventsourcing] class Supervisor(
               id -> EntitySlot.Passivating(Vector.empty)
           }
 
-          TheState(newEntities, subscriptions)
+          TheState(newEntities, subscriptions, projectionSubscriptions)
+        case SubscribeToProjection(name, projName, ref) =>
+          TheState(
+            entities,
+            subscriptions,
+            projectionSubscriptions.updatedWith(projName) {
+              case None       => Some(Vector(ProjectionSubscription(name, ref)))
+              case Some(subs) => Some(subs :+ ProjectionSubscription(name, ref))
+            }
+          )
+        case UnsubscribeFromProjection(name) =>
+          TheState(
+            entities,
+            subscriptions,
+            projectionSubscriptions.toVector
+              .map((projName, subs) => projName -> subs.filterNot(_.name == name))
+              .filter(_._2.nonEmpty)
+              .toMap
+          )
+        case ProjectionUpdate(name, entityId) =>
+          projectionSubscriptions.getOrElse(name, Vector.empty).foreach(_.poke(entityId))
+          state
       })
 
-  override def initialState: State = TheState(Map.empty, Map.empty)
+  override def initialState: State = TheState(Map.empty, Map.empty, Map.empty)
 
   private def scheduleCheckIdleEntities(): Unit =
     scheduler.scheduleOnce(config.entityIdleShutdownTime / 2)(() => send(Supervisor.CheckIdleEntities()))
@@ -170,6 +208,16 @@ private[eventsourcing] object Supervisor {
   ) extends SupervisorMessage
 
   case class Unsubscribe[State](id: Int, entityType: EntityKind[?, State], name: String) extends SupervisorMessage
+
+  case class SubscribeToProjection(
+      subscriptionName: String,
+      projectionName: String,
+      ref: castor.Actor[Int]
+  ) extends SupervisorMessage
+
+  case class UnsubscribeFromProjection(subscriptionName: String) extends SupervisorMessage
+
+  case class ProjectionUpdate(name: String, entityId: Int) extends SupervisorMessage
 
   private case class CheckIdleEntities() extends SupervisorMessage
   case class ClearMemory()               extends SupervisorMessage

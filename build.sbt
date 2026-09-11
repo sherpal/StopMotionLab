@@ -46,9 +46,10 @@ val commonSettings = Seq(
     "-unchecked",
     "-language:higherKinds",
     "-feature",
-    "-language:implicitConversions"
+    "-language:implicitConversions",
+    "-Werror"
   ),
-  libraryDependencies ++= Seq("org.scalameta" %% "munit" % "1.0.4" % Test)
+  libraryDependencies ++= Seq("org.scalameta" %% "munit" % "1.3.6" % Test)
 )
 
 val circeVersion = "0.14.9"
@@ -69,13 +70,13 @@ lazy val common = projectMatrix
   .jvmPlatform(scalaVersions = Seq(commonScalaVersion))
   .jsPlatform(scalaVersions = Seq(commonScalaVersion))
 
-val flywayVersion = "13.3.0"
+val flywayVersion = "13.6.0"
 
 def databaseStuff = Seq(
-  "com.lihaoyi" %% "scalasql-simple"           % "0.3.1",
+  "com.lihaoyi" %% "scalasql-simple"           % "0.3.2",
   "org.flywaydb" % "flyway-core"               % flywayVersion,
   "org.flywaydb" % "flyway-database-nc-sqlite" % flywayVersion,
-  "org.xerial"   % "sqlite-jdbc"               % "3.53.2.1"
+  "org.xerial"   % "sqlite-jdbc"               % "3.53.4.0"
 )
 
 lazy val server = project
@@ -84,10 +85,10 @@ lazy val server = project
     commonSettings,
     name := "StopMotionLabServer",
     libraryDependencies ++= Seq(
-      "com.lihaoyi"      %% "cask"          % "0.11.3",
-      "com.lihaoyi"      %% "os-lib"        % "0.11.8",
-      "com.google.zxing" % "core"           % "3.5.3",
-      "org.bouncycastle" % "bcpkix-jdk18on" % "1.79" // mints the local self-signed TLS certificate authority/leaf certs
+      "com.lihaoyi"     %% "cask"           % "0.11.3",
+      "com.lihaoyi"     %% "os-lib"         % "0.11.8",
+      "com.google.zxing" % "core"           % "3.5.4",
+      "org.bouncycastle" % "bcpkix-jdk18on" % "1.86" // mints the local self-signed TLS certificate authority/leaf certs
     ) ++ databaseStuff,
     fork := true
   )

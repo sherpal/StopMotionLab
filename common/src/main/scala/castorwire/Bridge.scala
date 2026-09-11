@@ -25,7 +25,7 @@ final class Bridge(sendMessage: WireMessage => Unit)(using ctx: castor.Context) 
     * throughout this codebase. Pass `oneShot = false` for an actor meant to receive more than one message over time
     * (e.g. a future subscription-style command).
     */
-  def registerLocal[R](actor: castor.Actor[R], oneShot: Boolean = true)(using d: Decoder[R]): String = {
+  def registerLocal[R](actor: castor.Actor[R], oneShot: Boolean)(using d: Decoder[R]): String = {
     val token = s"a${counter.incrementAndGet()}"
     registry.updateAndGet(_ + (token -> (json => {
       if oneShot then registry.updateAndGet(_ - token)
@@ -73,7 +73,7 @@ object Bridge {
     */
   inline def bridgedCodec[A](using bridge: Bridge, m: Mirror.Of[A]): Codec[A] = {
     given [R](using d: Decoder[R]): Encoder[castor.Actor[R]] =
-      Encoder.encodeString.contramap(bridge.registerLocal(_))
+      Encoder.encodeString.contramap(bridge.registerLocal(_, oneShot = true))
 
     given [R](using e: Encoder[R]): Decoder[castor.Actor[R]] =
       Decoder.decodeString.map(bridge.remoteProxy[R](_))

@@ -2,6 +2,7 @@ package be.doeraene.routes
 
 import be.doeraene.websocket.TypedWsChannelActor
 import castorwire.{Bridge, CommandRouter, WireMessage}
+import eventsourcing.EventSourcingService
 
 /** Generic entry point for sending entity commands from the frontend over a websocket -- see `castorwire.Bridge` for
   * how a Command ADT's `replyTo: castor.Actor[R]` fields survive the trip without ever being duplicated into a separate
@@ -11,7 +12,10 @@ import castorwire.{Bridge, CommandRouter, WireMessage}
   * its Command ADT registers one (see `MoviesService.commandRouter`).
   */
 //noinspection TypeAnnotation
-class CommandRoutes(routers: Seq[CommandRouter])(using castor.Context, cask.util.Logger) extends cask.Routes {
+class CommandRoutes(routers: Seq[CommandRouter])(using eventSourcing: EventSourcingService)(using
+    castor.Context,
+    cask.util.Logger
+) extends cask.Routes {
 
   private val routersByKind: Map[String, CommandRouter] = routers.map(r => r.entityKind -> r).toMap
 
@@ -31,21 +35,30 @@ class CommandRoutes(routers: Seq[CommandRouter])(using castor.Context, cask.util
             case None         => System.err.println(s"No command router registered for entity kind ${frame.entityKind}")
           }
           None
+        case WireMessage.Reply(token, payload) =>
+          // a reply directed at an actor *we* registered -- relevant once this connection
+          // is also used to push commands the other way (e.g. subscriptions); unused today.
+          bridge.deliver(token, payload)
+          None
         case WireMessage.Subscribe(id, entityKind, token) =>
           routersByKind.get(entityKind) match {
             case Some(router) =>
               subscriptions = subscriptions + (token -> router.subscribe(id, token, bridge))
-            case None => System.err.println(s"No command router registered for entity kind ${entityKind}")
+            case None => System.err.println(s"No command router registered for entity kind $entityKind")
           }
           None
         case WireMessage.UnSubscribe(token) =>
           subscriptions.get(token).foreach(_())
           subscriptions -= token
           None
-        case WireMessage.Reply(token, payload) =>
-          // a reply directed at an actor *we* registered -- relevant once this connection
-          // is also used to push commands the other way (e.g. subscriptions); unused today.
-          bridge.deliver(token, payload)
+        case WireMessage.SubscribeToProjection(name, token) =>
+          val sub = eventSourcing.subscribeToProjection(name, bridge.remoteProxy(token))
+          subscriptions = subscriptions + (token -> sub.asFunction)
+
+          None
+        case WireMessage.UnsubscribeFromProjection(token) =>
+          subscriptions.get(token).foreach(_())
+          subscriptions -= token
           None
       },
       { case cask.Ws.Close(_, _) =>

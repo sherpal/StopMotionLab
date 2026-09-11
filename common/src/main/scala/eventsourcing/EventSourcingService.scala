@@ -43,6 +43,15 @@ class EventSourcingService(
     Subscription(() => supervisor.send(Supervisor.Unsubscribe(id, entityKind, subscriptionName)))
   }
 
+  def subscribeToProjection(
+      projectionName: String,
+      replyTo: castor.Actor[Int]
+  ): Subscription = {
+    val subscriptionName = s"projection-subscription-${subscriptionCount.getAndIncrement()}"
+    supervisor.send(Supervisor.SubscribeToProjection(subscriptionName, projectionName, replyTo))
+    Subscription(() => supervisor.send(Supervisor.UnsubscribeFromProjection(subscriptionName)))
+  }
+
   /** Returns the biggest entity id for which an event has been registered.
     *
     * If you want to ensure that you don't create an entity with the same id "twice", you should have a "Created" state
@@ -71,7 +80,7 @@ class EventSourcingService(
     if registeredProjections.contains(projection.name) then
       throw IllegalArgumentException(s"Projection with name ${projection.name} is already registered")
     ProjectionRunner.ProjectionHandle(
-      ProjectionRunner(eventStore, scheduler, entityInfo, projection, pollInterval, autoPoll = !isInTest)
+      ProjectionRunner(eventStore, scheduler, entityInfo, projection, pollInterval, autoPoll = !isInTest, supervisor)
     )
   }
 
@@ -105,6 +114,8 @@ object EventSourcingService {
   object Subscription {
     extension (sub: Subscription) {
       inline def unsubscribe(): Unit = sub()
+
+      inline def asFunction: () => Unit = sub
     }
 
     private[EventSourcingService] def apply(unsub: () => Unit): Subscription = unsub

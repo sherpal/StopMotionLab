@@ -37,10 +37,9 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
         case Left(err)      => System.err.println(s"Failed to decode Movie.Command: $err")
       }
 
-    override def subscribe(entityId: Int, actorToken: String, bridge: Bridge): () => Unit = {
-      val sub = eventSourcing.subscribe(entityId, entityInfo.entityKind, bridge.remoteProxy(actorToken))
-      () => sub.unsubscribe()
-    }
+    override def subscribe(entityId: Int, actorToken: String, bridge: Bridge): () => Unit =
+      eventSourcing.subscribe(entityId, entityInfo.entityKind, bridge.remoteProxy(actorToken)).asFunction
+
   }
 
   private val movieProjection: Projection[Movie.Event] = Projection(

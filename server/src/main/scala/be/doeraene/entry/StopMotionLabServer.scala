@@ -29,7 +29,7 @@ object StopMotionLabServer extends cask.MainRoutes {
   given MoviesService           = MoviesService()
   given ConnectedClientsService = ConnectedClientsService()
 
-  def otherRoutes: Seq[cask.Routes] =
+  private def otherRoutes: Seq[cask.Routes] =
     Seq(
       VideoFluxRoutes(),
       ImagesRoutes(),

@@ -16,9 +16,9 @@ object Home {
     val moviesVar  = Var(Vector.empty[MovieMetadata])
     val loadingVar = Var(true)
 
-    val createMovieBus   = new EventBus[Unit]
-    val deleteMovieBus   = new EventBus[Movie.Id]
-    val restoredMovieBus = new EventBus[Movie.Id]
+    val createMovieBus           = new EventBus[Unit]
+    val deleteMovieBus           = new EventBus[Movie.Id]
+    val movieProjectionUpdateBus = new EventBus[Int]
 
     def fetchMovies(): EventStream[Vector[MovieMetadata]] = EventStream.fromFuture(moviesService.movies)
 
@@ -27,7 +27,7 @@ object Home {
       boxSizing.borderBox,
       display.flex,
       flexDirection.column,
-      gap.px     := 16,
+      gap.px := 16,
 
       Bar.of(
         _.design := BarDesign.Header,
@@ -36,9 +36,9 @@ object Home {
           display.flex,
           alignItems.center,
           gap.px := 8,
-          RestoreMovieDialog(restoredMovieBus.writer),
+          RestoreMovieDialog(),
           Button.of(
-            _.icon   := IconName.add,
+            _.icon := IconName.add,
             _ => "Nouveau film",
             _.design := ButtonDesign.Emphasized,
             _.events.onClick.preventDefault.mapToUnit --> createMovieBus.writer
@@ -54,7 +54,9 @@ object Home {
         _ => boxSizing.borderBox,
         _.slots.header := Card.header.of(
           _.titleText := "Mes films",
-          _.subtitleText <-- moviesVar.signal.map(movies => s"${movies.length} film${if movies.length > 1 then "s" else ""}")
+          _.subtitleText <-- moviesVar.signal.map(movies =>
+            s"${movies.length} film${if movies.length > 1 then "s" else ""}"
+          )
         ),
         _ => MovieList(moviesVar.signal, loadingVar.signal, deleteMovieBus.writer)
       ),
@@ -72,9 +74,9 @@ object Home {
       deleteMovieBus.events
         .flatMapSwitch(movieId => EventStream.fromFuture(moviesService.deleteWithRetries(movieId)))
         .flatMapSwitch(_ => fetchMovies()) --> moviesVar.writer,
-      // Same projection-lag reasoning as the delete flow above: wait a bit before refetching the active movies
-      // list so the restored movie has a chance to show up in it.
-      restoredMovieBus.events.delay(300).flatMapSwitch(_ => fetchMovies()) --> moviesVar.writer
+
+      moviesService.subscribeToMoviesProjection(movieProjectionUpdateBus.writer),
+      movieProjectionUpdateBus.events.flatMapSwitch(_ => fetchMovies()) --> moviesVar.writer
     )
 
   }

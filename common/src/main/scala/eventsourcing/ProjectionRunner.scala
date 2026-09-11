@@ -8,17 +8,17 @@ import scala.concurrent.duration.FiniteDuration
 import scala.util.control.NonFatal
 import scala.util.{Failure, Success}
 
-/** Drives one [[Projection]]: polls the event log for events of one entity kind past the projection's
-  * last saved checkpoint, applies them in order, and persists progress as it goes.
+/** Drives one [[Projection]]: polls the event log for events of one entity kind past the projection's last saved
+  * checkpoint, applies them in order, and persists progress as it goes.
   *
-  * One `ProjectionRunner` is one castor actor, so a given projection's events are always applied strictly
-  * in order, one at a time — independent projections run fully in parallel with each other and with the
-  * entity actors, since none of them share a mailbox.
+  * One `ProjectionRunner` is one castor actor, so a given projection's events are always applied strictly in order, one
+  * at a time — independent projections run fully in parallel with each other and with the entity actors, since none of
+  * them share a mailbox.
   *
   * @param autoPoll
-  *   whether to keep re-scheduling itself after catching up (production). Tests should pass `false` and
-  *   drive catch-up explicitly via `poke()`, since a self-rescheduling timer would otherwise keep
-  *   `castor.Context.Test` permanently "active" and make `waitForInactivity()` hang forever.
+  *   whether to keep re-scheduling itself after catching up (production). Tests should pass `false` and drive catch-up
+  *   explicitly via `poke()`, since a self-rescheduling timer would otherwise keep `castor.Context.Test` permanently
+  *   "active" and make `waitForInactivity()` hang forever.
   */
 private[eventsourcing] class ProjectionRunner[Event, EntityState](
     eventStore: EventStore,
@@ -26,17 +26,19 @@ private[eventsourcing] class ProjectionRunner[Event, EntityState](
     entityInfo: EntityInformation[?, Event, EntityState],
     projection: Projection[Event],
     pollInterval: FiniteDuration,
-    autoPoll: Boolean
+    autoPoll: Boolean,
+    supervisor: Supervisor
 )(using castor.Context)
     extends castor.StateMachineActor[ProjectionRunner.Message] {
   import ProjectionRunner.*
 
-  /** Runs the handler for one row, swallowing any exception (logging it) so a broken handler can never
-    * take the whole actor down. Returns whether it succeeded.
+  /** Runs the handler for one row, swallowing any exception (logging it) so a broken handler can never take the whole
+    * actor down. Returns whether it succeeded.
     */
   private def runHandler(row: RawEventEnvelope): Boolean =
     try {
       projection.handle(row.entityId, entityInfo.decodeEnvelope(row))
+      supervisor.send(Supervisor.ProjectionUpdate(projection.name, row.entityId))
       true
     } catch {
       case NonFatal(e) =>
@@ -75,12 +77,13 @@ private[eventsourcing] class ProjectionRunner[Event, EntityState](
 
   private sealed abstract class TheState(handler: Message => State) extends State(handler)
 
-  /** Initial state: waiting for the persisted checkpoint to load before doing anything else, buffering
-    * `IsUpToDate` queries in the meantime (mirrors [[EventSourcedActor]]'s recovery buffering).
+  /** Initial state: waiting for the persisted checkpoint to load before doing anything else, buffering `IsUpToDate`
+    * queries in the meantime (mirrors [[EventSourcedActor]]'s recovery buffering).
     */
-  private case class LoadingCheckpoint(bufferedIsUpToDate: Vector[IsUpToDate]) extends TheState({
-        case Tick()                 => state // stray: the first Tick is fired once the checkpoint is known
-        case IsUpToDate(replyTo)    => LoadingCheckpoint(bufferedIsUpToDate :+ IsUpToDate(replyTo))
+  private case class LoadingCheckpoint(bufferedIsUpToDate: Vector[IsUpToDate])
+      extends TheState({
+        case Tick()                   => state // stray: the first Tick is fired once the checkpoint is known
+        case IsUpToDate(replyTo)      => LoadingCheckpoint(bufferedIsUpToDate :+ IsUpToDate(replyTo))
         case CheckpointLoaded(offset) =>
           send(Tick()) // kick off the first catch-up/delivery cycle immediately
           bufferedIsUpToDate.foreach(send)
@@ -110,9 +113,8 @@ private[eventsourcing] class ProjectionRunner[Event, EntityState](
         case CheckpointLoaded(_) | BatchProcessed(_, _) | BatchFailed(_) => state // unreachable here
       })
 
-  /** A `Tick()` is in flight (its batch was fetched and/or is being processed). Further ticks are
-    * coalesced rather than dropped, so a `poke()` landing mid-batch still forces one more catch-up cycle
-    * once the current one finishes.
+  /** A `Tick()` is in flight (its batch was fetched and/or is being processed). Further ticks are coalesced rather than
+    * dropped, so a `poke()` landing mid-batch still forces one more catch-up cycle once the current one finishes.
     */
   private case class Fetching(cursor: Int, tickPending: Boolean)
       extends TheState({
@@ -156,12 +158,12 @@ object ProjectionRunner {
   private[eventsourcing] case class IsUpToDate(replyTo: castor.Actor[Boolean]) extends Message
 
   // -- internal continuations, only ever sent by a ProjectionRunner to itself --
-  private[eventsourcing] case class CheckpointLoaded(offset: Int)                          extends Message
+  private[eventsourcing] case class CheckpointLoaded(offset: Int)                         extends Message
   private[eventsourcing] case class BatchProcessed(newCursor: Int, batchWasFull: Boolean) extends Message
-  private[eventsourcing] case class BatchFailed(error: Throwable)                          extends Message
+  private[eventsourcing] case class BatchFailed(error: Throwable)                         extends Message
 
-  /** Handle to a running projection. Only really useful in tests: `poke()` forces one catch-up cycle
-    * immediately, instead of waiting for the automatic poll timer.
+  /** Handle to a running projection. Only really useful in tests: `poke()` forces one catch-up cycle immediately,
+    * instead of waiting for the automatic poll timer.
     */
   final class ProjectionHandle private[eventsourcing] (runner: ProjectionRunner[?, ?])(using castor.Context) {
     def poke()(using OnlyInTest): Unit = runner.poke()

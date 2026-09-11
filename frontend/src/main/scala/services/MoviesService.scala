@@ -1,7 +1,7 @@
 package services
 
 import be.doeraene.utils.castorutils.BottleNeckActor
-import com.raquo.laminar.api.A.*
+import com.raquo.laminar.api.L.*
 import data.movie.{DeletedMovieMetadata, Movie, MovieMetadata}
 import io.circe.Codec
 import urldsl.language.dummyErrorImpl.*
@@ -48,6 +48,9 @@ class MoviesService(using
 
     (EventStream.merge(stream, initialBus.events), cancel)
   }
+
+  def subscribeToMoviesProjection(observer: Observer[Int]): Mod[HtmlElement] =
+    commandBridge.subscribeToProjection("movie-projection", observer)
 
   def delete(id: Movie.Id): Future[Option[Boolean]] =
     movieEntity(id).passIfPossible(Movie.Command.Delete.apply)

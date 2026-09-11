@@ -15,14 +15,16 @@ enum WireMessage derives Codec:
   case Command(frame: CommandFrame)
 
   /** A message sent to a previously-registered actor, identified by its token -- see [[Bridge.registerLocal]] /
-    * [[Bridge.remoteProxy]]. Typically a reply to a command, but nothing here assumes request/response: a non-one-shot
+    * [[Bridge.remoteProxy]]. Typically, a reply to a command, but nothing here assumes request/response: a non-one-shot
     * registration can receive many of these over time.
     */
   case Reply(token: String, payload: Json)
 
   case Subscribe(id: Int, entityKind: String, token: String)
-  
   case UnSubscribe(token: String)
+
+  case SubscribeToProjection(name: String, token: String)
+  case UnsubscribeFromProjection(token: String)
 
 /** Knows how to decode and dispatch commands for one entity kind. Register one per entity kind that should be reachable
   * over a castorwire connection -- this is the whitelist of what's actually exposed to the wire, and the only place

@@ -9,8 +9,8 @@ import services.MoviesService
 
 import scala.concurrent.ExecutionContext
 
-/** The icon button + confirmation dialog that permanently deletes the current movie. The delete button only
-  * arms once the user has typed the movie's exact name, and a successful deletion navigates back home.
+/** The icon button + confirmation dialog that permanently deletes the current movie. The delete button only arms once
+  * the user has typed the movie's exact name, and a successful deletion navigates back home.
   */
 object DeleteMovieDialog {
 
@@ -39,7 +39,7 @@ object DeleteMovieDialog {
         _.closeFromEvents(closeDialogBus.events),
         _.headerText := "Supprimer ce film",
         // reset the typed text every time the dialog is (re)opened, so a leftover match from a previous,
-        // cancelled attempt can't leave the button armed by accident.
+        // canceled attempt can't leave the button armed by accident.
         _ => deleteClickBus.events.mapTo("") --> typedNameVar.writer,
         _ =>
           sectionTag(
@@ -82,8 +82,7 @@ object DeleteMovieDialog {
       ),
       confirmBus.events
         .flatMapSwitch(_ => EventStream.fromFuture(movieService.deleteWithRetries(movieId)))
-        .collect { case true => () } // delay a bit to let projection have a chance to run
-        .delay(300) --> Observer[Unit](_ =>
+        .collect { case true => () } --> Observer[Unit](_ =>
         Router.router.moveTo("/" ++ (base / entry.DefinedRoutes.home).createPath())
       )
     )
