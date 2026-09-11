@@ -68,25 +68,25 @@ object MovieDisplay {
       ),
       _ =>
         div(
-          padding.px       := 16,
+          padding.px := 16,
           display.flex,
           flexDirection.column,
-          gap.px           := 16,
+          gap.px := 16,
 
           manipulateSelectionComponent(movieId, selectedIndices, imagesSignal),
 
           div(
-            className     := "smlab-filmstrip-box",
+            className       := "smlab-filmstrip-box",
             borderRadius.px := 8,
-            width.percent := 100,
+            width.percent   := 100,
             overflow.hidden,
             backgroundColor := "var(--sapList_Background, transparent)",
             div(
               className := "smlab-filmstrip-track",
               display.flex,
-              gap.px    := 8,
+              gap.px     := 8,
               padding.px := 4,
-              width     := "max-content",
+              width      := "max-content",
               children <-- imagesSignal
                 .combineWith(selectedIndices.signal)
                 .map((images, selected) =>
@@ -177,7 +177,7 @@ object MovieDisplay {
     div(
       width.percent := 100,
       Slider.of(
-        _.min           := 0.0,
+        _.min := 0.0,
         _.max <-- imageCountSignal.map(_ - 1).map(_.toDouble),
         _.step          := 1.0,
         _.showTickmarks := true,
@@ -196,47 +196,51 @@ object MovieDisplay {
       )
 
     val frameLabelSignal =
-      imagesSignal.map(_.length).combineWithFn(scrollPositionSignal)((count, index) =>
-        if count == 0 then None else Some(s"${index.min(count - 1) + 1} / $count")
-      )
+      imagesSignal
+        .map(_.length)
+        .combineWithFn(scrollPositionSignal)((count, index) =>
+          if count == 0 then None else Some(s"${index.min(count - 1) + 1} / $count")
+        )
 
     div(
-      className       := "smlab-framed",
+      className := "smlab-framed",
       position.relative,
-      width.percent   := 100,
-      minHeight.px    := 300,
+      width.percent := 100,
+      minHeight.px  := 300,
       display.flex,
       alignItems.center,
       justifyContent.center,
       backgroundColor := "var(--sapList_Background, #eee)",
-      child <-- currentImageSignal.map {
-        case Some(image) =>
-          img(
-            cls("smlab-fade-in"),
-            height.px                              := 500,
-            maxWidth.percent                       := 100,
-            htmlAttr("object-fit", StringAsIsCodec) := "contain",
-            src                                     := imagesService.imageUrl(image)
-          )
-        case None =>
+
+      child <-- imagesSignal.map { images =>
+        if images.isEmpty then
           div(
             padding.px := 48,
             display.flex,
             flexDirection.column,
             alignItems.center,
-            gap.px     := 8,
-            opacity    := 0.5,
+            gap.px  := 8,
+            opacity := 0.5,
             Icon.of(_.name := IconName.camera),
             Text("En attente d'images...")
           )
+        else
+          img(
+            cls("smlab-fade-in"),
+            height.px                               := 500,
+            maxWidth.percent                        := 100,
+            htmlAttr("object-fit", StringAsIsCodec) := "contain",
+            src <-- scrollPositionSignal.map(index => images(index.min(images.length - 1))).map(imagesService.imageUrl)
+          )
       },
+
       child.maybe <-- frameLabelSignal.map(
         _.map(label =>
           Tag.of(
             _.design := TagDesign.Neutral,
             _ => position.absolute,
-            _ => top.px    := 8,
-            _ => left.px   := 8,
+            _ => top.px  := 8,
+            _ => left.px := 8,
             _ => label
           )
         )
@@ -251,16 +255,16 @@ object MovieDisplay {
       selectObserver: Observer[Set[ClickModifier]]
   )(using imagesService: ImagesService): HtmlElement = {
     div(
-      className     := "smlab-thumb",
+      className                    := "smlab-thumb",
       cls("smlab-thumb--selected") := selected,
-      borderRadius.px := 8,
-      border          := "3px solid transparent",
+      borderRadius.px              := 8,
+      border                       := "3px solid transparent",
       overflow.hidden,
-      flexShrink      := 0.0,
+      flexShrink := 0.0,
       img(
-        src                                     := imagesService.imageUrl(data),
-        height.px                               := 100,
-        width.px                                := 100,
+        src       := imagesService.imageUrl(data),
+        height.px := 100,
+        width.px  := 100,
         display.block,
         htmlAttr("object-fit", StringAsIsCodec) := "cover"
       ),
@@ -292,9 +296,9 @@ object MovieDisplay {
       Vector[Mod[HtmlElement]](
         Button.of(
           _.disabled <-- noSelectionSignal,
-          _.icon     := IconName.delete,
+          _.icon := IconName.delete,
           _ => "Supprimer",
-          _.design   := ButtonDesign.Negative,
+          _.design := ButtonDesign.Negative,
           _.events.onClick.mapToUnit --> deleteClickBus.writer
         ),
         Dialog.of(
@@ -351,7 +355,7 @@ object MovieDisplay {
       Vector[Mod[HtmlElement]](
         Button.of(
           _.disabled <-- noSelectionSignal,
-          _.icon     := IconName.duplicate,
+          _.icon := IconName.duplicate,
           _ => "Dupliquer",
           _.events.onClick.mapToUnit --> duplicateSelectedBus.writer
         ),

@@ -73,7 +73,7 @@ object BottleNeckActor {
                 exception.printStackTrace() // todo: better logging
                 send(BottleNeckMessage.ResponseSent())
             }
-            state
+            InFlight()
         })
   }
 

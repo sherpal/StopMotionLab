@@ -4,7 +4,7 @@ import be.doeraene.services.database.DatabaseService
 import be.doeraene.utils.testshenanigans.HasTestPower
 import castorwire.{Bridge, WireMessage}
 import data.movie.Movie
-import eventsourcing.{EventSourcingService, cleanEventSourcingService, clearSupervisorMemory}
+import eventsourcing.{EventSourcingService, Time, cleanEventSourcingService, clearSupervisorMemory}
 import io.circe.syntax.*
 
 import java.nio.file.Paths
@@ -76,7 +76,7 @@ class MoviesServiceTest extends munit.FunSuite with HasTestPower {
 
   fixture.test("I can delete a movie") { (movies, _, _, _) =>
     val id             = movies.create()
-    val beforeDeleting = System.currentTimeMillis() / 1000
+    val beforeDeleting = Time.now()
     movies.delete(id)
     val notMovie = movies.movie(id)
     assertEquals(notMovie, Option.empty)

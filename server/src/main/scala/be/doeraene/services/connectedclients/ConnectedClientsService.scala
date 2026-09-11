@@ -58,12 +58,12 @@ class ConnectedClientsService(using castor.Context, cask.util.Logger) {
             .map(_.channel)
             .foreach(_.send(PhoneMessage.WebRTCToPhoneWrapper(message.forward(id.value))))
           None
-        case ComputerMessage.AskPicture(phoneId) =>
+        case ComputerMessage.AskPicture(phoneId, requestId) =>
           imageProviders.get().get(ConnectedClientsService.Ids.ImageProviderClientId.fromValue(phoneId)) match {
             case None =>
               println(s"No phone with id $phoneId")
             case Some(imageProvider) =>
-              imageProvider.channel.send(PhoneMessage.ComputerAskedPicture(id.value, movieId))
+              imageProvider.channel.send(PhoneMessage.ComputerAskedPicture(id.value, movieId, requestId))
           }
           None
       },
@@ -99,9 +99,13 @@ class ConnectedClientsService(using castor.Context, cask.util.Logger) {
             movieEditors
               .get()
               .get(movieEditorId)
-              .foreach(_.channel.send(ComputerMessage.WebRTCToComputerWrapper(message.forward(imageProvider.id.value))))
+              .foreach(_.send(ComputerMessage.WebRTCToComputerWrapper(message.forward(imageProvider.id.value))))
             None
-          case PhoneMessage.HeartBeat => None
+          case PhoneMessage.HeartBeat                                          => None
+          case PhoneMessage.UploadedPictureFor(computerId, movieId, requestId) =>
+            val movieEditorId = ConnectedClientsService.Ids.MovieEditorClientId.fromValue(computerId)
+            movieEditors.get().get(movieEditorId).foreach(_.send(ComputerMessage.PhoneTookPicture(requestId)))
+            None
         },
         { case cask.Ws.Close(_, _) =>
           imageProviders.updateAndGet(_ - imageProvider.id)
@@ -145,7 +149,10 @@ object ConnectedClientsService {
       id: Ids.MovieEditorClientId,
       channel: TypedWsChannelActor[ComputerMessage.ComputerToServerMessage, ComputerMessage.ServerToComputerMessage],
       movie: Movie.Id
-  )
+  ) {
+    def send(message: ComputerMessage.ServerToComputerMessage): Unit =
+      channel.send(message)
+  }
 
   case class ImageProviderClientInfo(
       id: Ids.ImageProviderClientId,

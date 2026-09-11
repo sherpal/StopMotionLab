@@ -108,7 +108,7 @@ object Home {
           .flatMapSwitch(id => EventStream.fromFuture(moviesService.restoreWithRetries(id)).map(id -> _))
           .collect { case (id, true) => id } --> restoredBus.writer,
         restoredBus.events --> deletedMoviesVar.updater[Movie.Id]((movies, id) => movies.filterNot(_.id == id)),
-        restoredBus.events.flatMapSwitch(_ => fetchMovies()) --> moviesVar.writer
+        restoredBus.events.delay(300).flatMapSwitch(_ => fetchMovies()) --> moviesVar.writer
       )
     }
 

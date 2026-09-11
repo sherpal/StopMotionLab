@@ -34,7 +34,7 @@ private[eventsourcing] class EventSourcedActor[Command, Event, EntityState](
       val envelopes = events.zipWithIndex
         .map((event, index) => (event, startingSequenceNumber + index))
         .map((event, sequenceNumber) =>
-          EventEnvelope[Event, EntityState](id, sequenceNumber, event, System.currentTimeMillis() / 1000)
+          EventEnvelope[Event, EntityState](id, sequenceNumber, event, Time.now())
         )
       eventStore.appendEnvelopes(envelopes.map(encodeEnvelope)).map { _ =>
         val resolved =

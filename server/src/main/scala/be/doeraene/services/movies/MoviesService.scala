@@ -1,23 +1,23 @@
 package be.doeraene.services.movies
 
 import be.doeraene.services.database.DatabaseService
+import be.doeraene.services.database.tables.Movie as DBMovie
+import be.doeraene.utils.castorutils.ask
+import be.doeraene.utils.testshenanigans.OnlyInTest
 import castor.SimpleActor
 import castorwire.{Bridge, CommandRouter}
-import data.movie.{DeletedMovieMetadata, Movie, MovieMetadata}
-import eventsourcing.{Effect, EntityInformation, EventSourcingService, Projection, ProjectionRunner}
-import be.doeraene.utils.castorutils.ask
 import data.movie.Movie.Event
-import be.doeraene.services.database.tables.Movie as DBMovie
-import be.doeraene.utils.testshenanigans.OnlyInTest
-import io.circe.{Encoder, Json}
+import data.movie.{DeletedMovieMetadata, Movie, MovieMetadata}
+import eventsourcing.{EventSourcingService, Projection, ProjectionRunner, Time}
+import io.circe.Json
 import scalasql.simple.SqliteDialect
 
-import scala.concurrent.duration.{Duration, DurationInt}
+import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future, Promise}
 
 class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingService)(using castor.Context) {
 
-  private def now(): Long = System.currentTimeMillis() / 1000
+  private def now(): Time = Time.now()
 
   private val entityInfo = Movie.entityInfo
 
@@ -49,7 +49,7 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
   ) { (id, envelope) =>
     import SqliteDialect.*
     def touchUpdateAt(): Unit = {
-      db.db.run(DBMovie.update(_.id === id).set(_.lastUpdateAt := now()))
+      db.db.run(DBMovie.update(_.id === id).set(_.lastUpdateAt := now().value))
       ()
     }
 
@@ -58,22 +58,18 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
         val movie = event(entityInfo.initialState)
         // just in case it was already there. In theory that can happen since the semantics is at least once.
         db.getMovie(movie.id.value).foreach(_ => db.deleteMovie(movie.id))
-        db.createMovie(DBMovie(movie.id.value, movie.name, movie.createdAt, now()))
+        db.createMovie(DBMovie(movie.id.value, movie.name, movie.createdAt.value, now().value))
       case Event.NameChanged(newName) =>
-        db.db.run(DBMovie.update(_.id === id).set(_.name := newName, _.lastUpdateAt := now()))
+        db.db.run(DBMovie.update(_.id === id).set(_.name := newName, _.lastUpdateAt := now().value))
       case Event.ImageAdded(_, _) =>
         touchUpdateAt()
-      case Event.Deleted(at) =>
+      case Event.Deleted(at, _) =>
         db.deleteMovie(Movie.Id(id))
-      case Event.Restored(_) =>
-        // deleteMovie hard-removed the movie row and its image links, so restoring means re-creating both from the
-        // live entity's state -- which is untouched, since deletion only ever marked the event-sourced actor as
-        // deleted, not the actor's own data.
-        val movie = Await.result(movieEntity(Movie.Id(id)).ask(Movie.Command.RawGet.apply), 10.seconds)
+      case Event.Restored(at, name, createdAt) =>
+        val movie = DBMovie(id, name, createdAt.value, at.value)
         // just in case it was already there. In theory that can happen since the semantics is at least once.
-        db.getMovie(movie.id.value).foreach(_ => db.deleteMovie(movie.id))
-        db.createMovie(DBMovie(movie.id.value, movie.name, movie.createdAt, now()))
-        db.reattachMovieImages(movie.id, movie.images)
+        db.getMovie(movie.id).foreach(_ => db.deleteMovie(Movie.Id(movie.id)))
+        db.createMovie(movie)
       case data.movie.Movie.Event.ImagesRemoved(_) =>
         touchUpdateAt()
       case data.movie.Movie.Event.ImagesDuplicated(_) =>
@@ -89,11 +85,9 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
   private val deletedMovieProjection: Projection[Movie.Event] =
     Projection("deleted-movie-proj", Projection.Semantics.AtLeastOnce) { (movieId, envelope) =>
       envelope.event match {
-        case Event.Deleted(_) =>
-          val movie = Await.result(movieEntity(Movie.Id(movieId)).ask(Movie.Command.RawGet.apply), 10.seconds)
-          println(s"Movie ${movie.id} ${movie.name} has been added to the projection of deleted movies.")
-          db.setDeletedInfo(movie.id, movie.name)
-        case Event.Restored(_) =>
+        case Event.Deleted(_, name) =>
+          db.setDeletedInfo(Movie.Id(movieId), name)
+        case Event.Restored(_, _, _) =>
           db.clearDeletedInfo(Movie.Id(movieId))
         case _ => () // nothing to do
       }
@@ -146,11 +140,11 @@ class MoviesService()(using db: DatabaseService, eventSourcing: EventSourcingSer
 
   def create(): Movie.Id = Await.result(createF(), Duration.Inf)
 
-  def deleteF(id: Movie.Id): Future[Boolean] = movieEntity(id).ask(Movie.Command.Delete.apply)
+  private def deleteF(id: Movie.Id): Future[Boolean] = movieEntity(id).ask(Movie.Command.Delete.apply)
 
   def delete(id: Movie.Id): Boolean = Await.result(deleteF(id), Duration.Inf)
 
-  def restoreF(id: Movie.Id): Future[Boolean] = movieEntity(id).ask(Movie.Command.Restore.apply)
+  private def restoreF(id: Movie.Id): Future[Boolean] = movieEntity(id).ask(Movie.Command.Restore.apply)
 
   def restore(id: Movie.Id): Boolean = Await.result(restoreF(id), Duration.Inf)
 

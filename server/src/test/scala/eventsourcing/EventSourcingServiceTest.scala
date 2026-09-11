@@ -255,7 +255,7 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
     entity2.send(Increment())
     ac.waitForInactivity()
 
-    // Recreate entity 1: this forces a fresh multi-page recovery. Queue several commands
+    // Recreate entity 1: this forces a fresh multipage recovery. Queue several commands
     // immediately, without waiting, so at least some of them arrive while the entity is
     // still replaying earlier pages (exercising LoadingState's command-buffering).
     val reloadedEntity1 = makeEntity(1)
@@ -644,7 +644,7 @@ class EventSourcingServiceTest extends munit.FunSuite with HasTestPower {
       for (_ <- 1 to 2) entity.send(Increment())
       ac.waitForInactivity()
 
-      // A brand new runner under the *same* projection name, simulating a process restart: it
+      // A brand-new runner under the *same* projection name, simulating a process restart: it
       // must resume from the persisted checkpoint (offset of event 3), not replay events 1-3.
       val secondRunInvocations = scala.collection.mutable.ArrayBuffer.empty[Int]
       eventSourcing.cleanRegisteredProjection("resumable") // allow re-registering the same name in this test

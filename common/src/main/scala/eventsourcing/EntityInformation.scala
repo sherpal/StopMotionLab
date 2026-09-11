@@ -39,7 +39,7 @@ trait EntityInformation[Command, Event, State] {
       entityId = entityId,
       sequenceNumber = sequenceNumber,
       event = deserializeEvent(eventPayload),
-      timestamp = timestamp
+      timestamp = Time.fromValue(timestamp)
     )
   }
 
@@ -51,7 +51,7 @@ trait EntityInformation[Command, Event, State] {
       sequenceNumber,
       eventPayload = serializeEvent(envelope.event),
       entityKind = entityKind.name,
-      timestamp = envelope.timestamp
+      timestamp = envelope.timestamp.value
     )
   }
 

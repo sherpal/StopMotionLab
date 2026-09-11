@@ -2,7 +2,7 @@ package data.movie
 
 import castorwire.Bridge
 import data.images.ImageData
-import eventsourcing.{Effect, EntityInformation}
+import eventsourcing.{Effect, EntityInformation, Time}
 import io.circe.{Codec, Decoder, Encoder}
 import urldsl.errors.DummyError
 import urldsl.errors.DummyError.dummyError
@@ -12,11 +12,11 @@ case class Movie(
     id: Movie.Id,
     name: String,
     images: Vector[Movie.ImageDataWithOrdering],
-    createdAt: Long,
-    deletedAt: Long
+    createdAt: Time,
+    deletedAt: Time
 ) {
-  def created: Boolean = createdAt > 0L
-  def deleted: Boolean = deletedAt > 0L
+  def created: Boolean = createdAt > Time.zero
+  def deleted: Boolean = deletedAt > Time.zero
   def active: Boolean  = created && !deleted
 
   def lastIndex: Option[Int] = images.flatMap(_.maybeIndex).maxOption
@@ -70,7 +70,7 @@ object Movie {
     case MoveImageRange(direction: MoveDirection, minIndex: Int, maxIndex: Int, replyTo: castor.Actor[Boolean])
 
     def handle(state: Movie, id: Int): Effect[Event, Movie] = {
-      def now(): Long = System.currentTimeMillis() / 1000
+      def now(): Time = Time.now()
       this match {
         case Create(replyTo) =>
           if state.created then
@@ -83,10 +83,11 @@ object Movie {
         case Get(replyTo) =>
           Effect.ReplyTo(replyTo, movie => Option.when(movie.active)(movie))
         case Delete(replyTo) =>
-          if state.active then Effect.Persist(Event.Deleted(now())).thenReply(replyTo)(_ => true)
+          if state.active then Effect.Persist(Event.Deleted(now(), state.name)).thenReply(replyTo)(_ => true)
           else Effect.ReplyTo(replyTo, _ => false)
         case Restore(replyTo) =>
-          if state.deleted then Effect.Persist(Event.Restored(now())).thenReply(replyTo)(_ => true)
+          if state.deleted then
+            Effect.Persist(Event.Restored(now(), state.name, state.createdAt)).thenReply(replyTo)(_ => true)
           else Effect.ReplyTo(replyTo, _ => false)
         case RawGet(replyTo) =>
           Effect.ReplyTo(replyTo, identity)
@@ -126,10 +127,10 @@ object Movie {
   }
 
   enum Event derives Codec:
-    case Created(id: Id, at: Long)
+    case Created(id: Id, at: Time)
     case NameChanged(newName: String)
-    case Deleted(at: Long)
-    case Restored(at: Long)
+    case Deleted(at: Time, movieName: String)
+    case Restored(at: Time, movieName: String, movieCreatedAt: Time)
     case ImageAdded(imageId: ImageData.Id, atIndex: Int)
     case ImagesRemoved(toRemove: Vector[(ImageData.Id, Int)])
     case ImagesDuplicated(toDuplicate: Vector[(ImageData.Id, Int)])
@@ -143,10 +144,10 @@ object Movie {
         )
       case NameChanged(newName) =>
         movie.copy(name = newName)
-      case Deleted(at) =>
+      case Deleted(at, _) =>
         movie.copy(deletedAt = at)
-      case Restored(_) =>
-        movie.copy(deletedAt = 0L)
+      case Restored(_, _, _) =>
+        movie.copy(deletedAt = Time.zero)
       case ImageAdded(imageId, atIndex) =>
         val data      = Movie.ImageDataWithOrdering(ImageData(imageId), Some(atIndex))
         val newImages = movie.images :+ data
@@ -205,7 +206,7 @@ object Movie {
 
   val entityInfo: EntityInformation[Command, Event, Movie] =
     EntityInformation.usingCirceSerialization[Movie.Command, Movie.Event, Movie](
-      Movie(Movie.Id.dummy, "Untitled", Vector.empty, createdAt = 0L, deletedAt = 0L),
+      Movie(Movie.Id.dummy, "Untitled", Vector.empty, createdAt = Time.zero, deletedAt = Time.zero),
       _(_),
       (command, state, id) => command.handle(state, id)
     )

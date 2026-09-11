@@ -1,9 +1,7 @@
 package data.movie
 
 import data.images.ImageData
-import eventsourcing.Effect
-
-import scala.collection.mutable
+import eventsourcing.{Effect, Time}
 
 /** Pure tests of `Movie.Command.handle`/`Movie.Event.apply`: no actor system, event store or bridge involved -- both
   * are plain functions (`(Command, Movie, Int) => Effect[Event, Movie]` and `(Event, Movie) => Movie`), so a command
@@ -28,9 +26,11 @@ class MovieCommandTest extends munit.FunSuite {
 
   /** Records every reply it's sent -- good enough here since nothing under test needs a live `castor.Context`. */
   private class RecordingActor[T] extends castor.Actor[T] {
-    val received: mutable.Seq[T] = scala.collection.mutable.ArrayBuffer.empty[T]
+    private val _received: scala.collection.mutable.ArrayBuffer[T] = scala.collection.mutable.ArrayBuffer.empty[T]
 
-    def send(t: T)(using fileName: sourcecode.FileName, line: sourcecode.Line): Unit = received += t
+    def received: Vector[T] = _received.toVector
+
+    def send(t: T)(using fileName: sourcecode.FileName, line: sourcecode.Line): Unit = _received += t
 
     def sendAsync(f: scala.concurrent.Future[T])(using fileName: sourcecode.FileName, line: sourcecode.Line): Unit = ()
   }
@@ -48,7 +48,7 @@ class MovieCommandTest extends munit.FunSuite {
   }
 
   private def activeMovie(images: Vector[Movie.ImageDataWithOrdering] = Vector.empty): Movie =
-    Movie(Movie.Id(1), "reel", images, createdAt = 1L, deletedAt = 0L)
+    Movie(Movie.Id(1), "reel", images, createdAt = Time.zero + 1L, deletedAt = Time.zero + 0L)
 
   // -- Create ---------------------------------------------------------------------------------------------------
 
@@ -60,7 +60,7 @@ class MovieCommandTest extends munit.FunSuite {
 
     assertEquals(after.id, Movie.Id(7))
     assert(after.created)
-    assertEquals(replyTo.received.toVector, Vector(Some(after)))
+    assertEquals(replyTo.received, Vector(Some(after)))
   }
 
   test("Create is a no-op, replying None, if the movie already exists") {
@@ -70,7 +70,7 @@ class MovieCommandTest extends munit.FunSuite {
     val after = run(Movie.Command.Create(replyTo), already)
 
     assertEquals(after, already)
-    assertEquals(replyTo.received.toVector, Vector(None))
+    assertEquals(replyTo.received, Vector(None))
   }
 
   // -- ChangeName -------------------------------------------------------------------------------------------------
@@ -80,51 +80,51 @@ class MovieCommandTest extends munit.FunSuite {
     val after   = run(Movie.Command.ChangeName("Holiday reel", replyTo), activeMovie())
 
     assertEquals(after.name, "Holiday reel")
-    assertEquals(replyTo.received.toVector, Vector(true))
+    assertEquals(replyTo.received, Vector(true))
   }
 
   test("ChangeName is rejected, replying false, on a movie that isn't active yet") {
     val notYetCreated = Movie.entityInfo.initialState
-    val replyTo        = RecordingActor[Boolean]()
+    val replyTo       = RecordingActor[Boolean]()
 
     val after = run(Movie.Command.ChangeName("Holiday reel", replyTo), notYetCreated)
 
     assertEquals(after, notYetCreated)
-    assertEquals(replyTo.received.toVector, Vector(false))
+    assertEquals(replyTo.received, Vector(false))
   }
 
   test("ChangeName is rejected, replying false, on a deleted movie") {
-    val deleted = activeMovie().copy(deletedAt = 2L)
+    val deleted = activeMovie().copy(deletedAt = Time.zero + 2L)
     val replyTo = RecordingActor[Boolean]()
 
     val after = run(Movie.Command.ChangeName("Holiday reel", replyTo), deleted)
 
     assertEquals(after, deleted)
-    assertEquals(replyTo.received.toVector, Vector(false))
+    assertEquals(replyTo.received, Vector(false))
   }
 
   // -- Get / RawGet -------------------------------------------------------------------------------------------------
 
   test("Get replies Some(movie) when active, None otherwise, and never persists anything") {
     val active  = activeMovie()
-    val deleted = active.copy(deletedAt = 2L)
+    val deleted = active.copy(deletedAt = Time.zero + 2L)
 
     val activeReply = RecordingActor[Option[Movie]]()
     assertEquals(run(Movie.Command.Get(activeReply), active), active)
-    assertEquals(activeReply.received.toVector, Vector(Some(active)))
+    assertEquals(activeReply.received, Vector(Some(active)))
 
     val deletedReply = RecordingActor[Option[Movie]]()
     assertEquals(run(Movie.Command.Get(deletedReply), deleted), deleted)
-    assertEquals(deletedReply.received.toVector, Vector(None))
+    assertEquals(deletedReply.received, Vector(None))
   }
 
   test("RawGet always replies with the raw state, active or not") {
     val notYetCreated = Movie.entityInfo.initialState
-    val replyTo        = RecordingActor[Movie]()
+    val replyTo       = RecordingActor[Movie]()
 
     run(Movie.Command.RawGet(replyTo), notYetCreated)
 
-    assertEquals(replyTo.received.toVector, Vector(notYetCreated))
+    assertEquals(replyTo.received, Vector(notYetCreated))
   }
 
   // -- Delete -------------------------------------------------------------------------------------------------------
@@ -134,30 +134,30 @@ class MovieCommandTest extends munit.FunSuite {
     val after   = run(Movie.Command.Delete(replyTo), activeMovie())
 
     assert(after.deleted)
-    assertEquals(replyTo.received.toVector, Vector(true))
+    assertEquals(replyTo.received, Vector(true))
   }
 
   test("Delete is rejected, replying false and changing nothing, on a movie that isn't active") {
     val notYetCreated = Movie.entityInfo.initialState
-    val replyTo        = RecordingActor[Boolean]()
+    val replyTo       = RecordingActor[Boolean]()
 
     val after = run(Movie.Command.Delete(replyTo), notYetCreated)
 
     assertEquals(after, notYetCreated)
-    assertEquals(replyTo.received.toVector, Vector(false))
+    assertEquals(replyTo.received, Vector(false))
   }
 
   // -- Restore ----------------------------------------------------------------------------------------------------
 
   test("Restore persists Restored and replies true, on a deleted movie") {
-    val deleted = activeMovie().copy(deletedAt = 2L)
+    val deleted = activeMovie().copy(deletedAt = Time.zero + 2L)
     val replyTo = RecordingActor[Boolean]()
 
     val after = run(Movie.Command.Restore(replyTo), deleted)
 
     assert(!after.deleted)
     assert(after.active, "created and no longer deleted: active again")
-    assertEquals(replyTo.received.toVector, Vector(true))
+    assertEquals(replyTo.received, Vector(true))
   }
 
   test("Restore is rejected, replying false and changing nothing, on a movie that isn't deleted") {
@@ -167,23 +167,23 @@ class MovieCommandTest extends munit.FunSuite {
     val after = run(Movie.Command.Restore(replyTo), active)
 
     assertEquals(after, active)
-    assertEquals(replyTo.received.toVector, Vector(false))
+    assertEquals(replyTo.received, Vector(false))
   }
 
   test("Restore is rejected, replying false, on a movie that was never created") {
     val notYetCreated = Movie.entityInfo.initialState
-    val replyTo        = RecordingActor[Boolean]()
+    val replyTo       = RecordingActor[Boolean]()
 
     val after = run(Movie.Command.Restore(replyTo), notYetCreated)
 
     assertEquals(after, notYetCreated)
-    assertEquals(replyTo.received.toVector, Vector(false))
+    assertEquals(replyTo.received, Vector(false))
   }
 
   test("Restore brings back the images and name the movie had when it was deleted") {
     val (id0, img0) = freshImage(0)
     val (id1, img1) = freshImage(1)
-    val deleted     = activeMovie(Vector(img0, img1)).copy(name = "Holiday reel", deletedAt = 2L)
+    val deleted     = activeMovie(Vector(img0, img1)).copy(name = "Holiday reel", deletedAt = Time.zero + 2L)
     val replyTo     = RecordingActor[Boolean]()
 
     val after = run(Movie.Command.Restore(replyTo), deleted)
@@ -214,7 +214,7 @@ class MovieCommandTest extends munit.FunSuite {
 
     val after = run(Movie.Command.RemoveImages(Vector(id0 -> 0), replyTo), movie)
 
-    assertEquals(replyTo.received.toVector, Vector(true))
+    assertEquals(replyTo.received, Vector(true))
     assertEquals(after.images.map(_.maybeIndex), Vector(None, Some(0), Some(1)))
     assert(after.containsImage(id1, 0))
     assert(after.containsImage(id2, 1))
@@ -230,18 +230,18 @@ class MovieCommandTest extends munit.FunSuite {
     val after = run(Movie.Command.RemoveImages(Vector(id0 -> 0, id1 -> 0), replyTo), movie)
 
     assertEquals(after, movie)
-    assertEquals(replyTo.received.toVector, Vector(false))
+    assertEquals(replyTo.received, Vector(false))
   }
 
   test("RemoveImages is rejected on a movie that isn't active") {
     val (id0, img0)   = freshImage(0)
     val notYetCreated = Movie.entityInfo.initialState.copy(images = Vector(img0))
-    val replyTo        = RecordingActor[Boolean]()
+    val replyTo       = RecordingActor[Boolean]()
 
     val after = run(Movie.Command.RemoveImages(Vector(id0 -> 0), replyTo), notYetCreated)
 
     assertEquals(after, notYetCreated)
-    assertEquals(replyTo.received.toVector, Vector(false))
+    assertEquals(replyTo.received, Vector(false))
   }
 
   // -- DuplicateImages --------------------------------------------------------------------------------------------
@@ -254,8 +254,9 @@ class MovieCommandTest extends munit.FunSuite {
 
     val after = run(Movie.Command.DuplicateImages(Vector(id0 -> 0), replyTo), movie)
 
-    assertEquals(replyTo.received.toVector, Vector(true))
-    val ordered = after.images.collect { case Movie.ImageDataWithOrdering(image, Some(index)) => index -> image.id }.sortBy(_._1)
+    assertEquals(replyTo.received, Vector(true))
+    val ordered =
+      after.images.collect { case Movie.ImageDataWithOrdering(image, Some(index)) => index -> image.id }.sortBy(_._1)
     assertEquals(ordered, Vector(0 -> id0, 1 -> id0, 2 -> id1))
   }
 
@@ -267,7 +268,7 @@ class MovieCommandTest extends munit.FunSuite {
     val after = run(Movie.Command.DuplicateImages(Vector(id0 -> 1), replyTo), movie) // id0 is at index 0, not 1
 
     assertEquals(after, movie)
-    assertEquals(replyTo.received.toVector, Vector(false))
+    assertEquals(replyTo.received, Vector(false))
   }
 
   // -- MoveImageRange -----------------------------------------------------------------------------------------------
@@ -283,7 +284,7 @@ class MovieCommandTest extends munit.FunSuite {
     // move the single-image range [0, 0] to the right, past id1
     val after = run(Movie.Command.MoveImageRange(Movie.MoveDirection.Right, minIndex = 0, maxIndex = 0, replyTo), movie)
 
-    assertEquals(replyTo.received.toVector, Vector(true))
+    assertEquals(replyTo.received, Vector(true))
     assert(after.containsImage(id1, 0))
     assert(after.containsImage(id0, 1))
   }
@@ -300,7 +301,7 @@ class MovieCommandTest extends munit.FunSuite {
     // move the single-image range [1, 1] to the left, past id0
     val after = run(Movie.Command.MoveImageRange(Movie.MoveDirection.Left, minIndex = 1, maxIndex = 1, replyTo), movie)
 
-    assertEquals(replyTo.received.toVector, Vector(true))
+    assertEquals(replyTo.received, Vector(true))
     assert(after.containsImage(id1, 0))
     assert(after.containsImage(id0, 1))
     assert(after.containsImage(id2, 2), "outside the moved range: must be left untouched")
@@ -321,7 +322,7 @@ class MovieCommandTest extends munit.FunSuite {
     // move the single-image range [0, 0] to the right, past id1 -- id2 is well beyond the range and should be untouched
     val after = run(Movie.Command.MoveImageRange(Movie.MoveDirection.Right, minIndex = 0, maxIndex = 0, replyTo), movie)
 
-    assertEquals(replyTo.received.toVector, Vector(true))
+    assertEquals(replyTo.received, Vector(true))
     assert(after.containsImage(id1, 0))
     assert(after.containsImage(id0, 1))
     assert(after.containsImage(id2, 2), "outside the moved range: must be left untouched")
@@ -343,7 +344,7 @@ class MovieCommandTest extends munit.FunSuite {
     // move the single-image range [2, 2] to the left, past id1 -- id0 is well below the range and should be untouched
     val after = run(Movie.Command.MoveImageRange(Movie.MoveDirection.Left, minIndex = 2, maxIndex = 2, replyTo), movie)
 
-    assertEquals(replyTo.received.toVector, Vector(true))
+    assertEquals(replyTo.received, Vector(true))
     assert(after.containsImage(id1, 2))
     assert(after.containsImage(id2, 1))
     assert(after.containsImage(id3, 3))
@@ -361,7 +362,7 @@ class MovieCommandTest extends munit.FunSuite {
     val after = run(Movie.Command.MoveImageRange(Movie.MoveDirection.Right, minIndex = 0, maxIndex = 1, replyTo), movie)
 
     assertEquals(after, movie)
-    assertEquals(replyTo.received.toVector, Vector(false))
+    assertEquals(replyTo.received, Vector(false))
   }
 
   test("MoveImageRange(Left, minIndex = 0, ...) is correctly rejected: there is nothing at minIndex - 1 to displace") {
@@ -383,7 +384,7 @@ class MovieCommandTest extends munit.FunSuite {
     val after = run(Movie.Command.MoveImageRange(Movie.MoveDirection.Left, minIndex = 0, maxIndex = 2, replyTo), movie)
 
     assertEquals(after, movie, "rejected: nothing should have changed")
-    assertEquals(replyTo.received.toVector, Vector(false))
+    assertEquals(replyTo.received, Vector(false))
   }
 
 }

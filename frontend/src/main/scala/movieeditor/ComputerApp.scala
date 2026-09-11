@@ -59,7 +59,19 @@ object ComputerApp {
     // true while a "make movie" export is being encoded, so the UI can show that something is happening
     val encodingVar = Var(false)
 
-    val askPictureBus = new EventBus[Unit]
+    val askPictureBus          = new EventBus[Unit]
+    var lastPictureRequestId   = -1L
+    def nextPictureRequestId() = {
+      lastPictureRequestId += 1L
+      lastPictureRequestId
+    }
+    val askPictureEvents = askPictureBus.events
+      .sample(currentProviderIdVar.signal)
+      .collect { case Some(providerId) =>
+        providerId
+      }
+      .map(ComputerMessage.AskPicture(_, nextPictureRequestId()))
+    val inFlightPictureRequests = Var(Set.empty[Long])
 
     // Only worth showing the QR code while nobody is connected yet.
     val showQrIdSignal: Signal[Option[String]] =
@@ -362,12 +374,9 @@ object ComputerApp {
                     .periodic(1000)
                     .sample(burstActive.signal)
                     .filter(identity)
-                    .mapToUnit
-                    .sample(currentProviderIdVar.signal)
-                    .collect { case Some(providerId) =>
-                      providerId
-                    }
-                    .map(ComputerMessage.AskPicture(_)) --> websocket.outWriter
+                    .sample(inFlightPictureRequests.signal)
+                    .filter(_.isEmpty)
+                    .mapToUnit --> askPictureBus.writer
               )
             )
           )
@@ -401,6 +410,16 @@ object ComputerApp {
         .collect { case WebRTCCommProtocol.ForwardWillSendOffer(providerId) =>
           Some(providerId)
         } --> currentProviderIdVar.writer,
+
+      askPictureEvents --> websocket.outWriter,
+      askPictureEvents.map(_.requestId) --> inFlightPictureRequests.updater[Long](_ + _),
+      websocket.inEvents.collect { case ComputerMessage.PhoneTookPicture(requestId) =>
+        requestId
+      } --> inFlightPictureRequests.updater[Long](_ - _),
+      inFlightPictureRequests.signal.changes
+        .filter(_.nonEmpty)
+        .flatMapSwitch(_ => EventStream.fromFuture(utils.sleep(3000)))
+        .mapTo(Set.empty[Long]) --> inFlightPictureRequests.writer,
 
       div(
         display.flex,

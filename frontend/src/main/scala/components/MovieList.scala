@@ -28,9 +28,7 @@ object MovieList {
         _.loading <-- loading,
         _ =>
           children <-- movies
-            .split(_.id)((key, _, updates) =>
-              movieRow(key, updates, pendingDeleteVar.writer.contramap(Some(_)))
-            )
+            .split(_.id)((key, _, updates) => movieRow(key, updates, pendingDeleteVar.writer.contramap(Some(_))))
       ),
       Dialog.of(
         _.showFromEvents(pendingDeleteVar.signal.changes.collect { case Some(_) => () }),
@@ -62,14 +60,16 @@ object MovieList {
           )
         )
       ),
-      confirmDeleteBus.events.sample(pendingDeleteVar.signal).collect { case Some(movie) => movie.id } --> deleteMovieObserver,
+      confirmDeleteBus.events.sample(pendingDeleteVar.signal).collect { case Some(movie) =>
+        movie.id
+      } --> deleteMovieObserver,
       confirmDeleteBus.events.mapToUnit --> closeDialogBus.writer,
       closeDialogBus.events.mapTo(None) --> pendingDeleteVar.writer
     )
   }
 
   private def formatLastUpdate(millis: Long): String = {
-    val date = new js.Date(millis.toDouble)
+    val date = new js.Date(millis.toDouble * 1000)
     s"Modifié le ${date.toLocaleDateString()} à ${date.toLocaleTimeString()}"
   }
 
@@ -81,9 +81,9 @@ object MovieList {
     val deleteClickBus = new EventBus[Unit]
 
     ListItem.of(
-      _.icon        := IconName.video,
-      _.tpe         := ListItemType.Navigation,
-      _.navigated   := true,
+      _.icon      := IconName.video,
+      _.tpe       := ListItemType.Navigation,
+      _.navigated := true,
       _.description <-- updates.map(movie => formatLastUpdate(movie.lastUpdateAt)),
       _ => child.text <-- updates.map(_.name),
       // ui5-li doesn't expose its own click event helper, but it's a normal element under the hood, so the plain

@@ -31,7 +31,7 @@ object PhoneApp {
 
     val webRTCConnectionsVar = Var(Vector.empty[WebRTCConnection.Provider])
 
-    val takePictureBus = new EventBus[(String, Movie.Id)]
+    val takePictureBus = new EventBus[(String, Movie.Id, Long)]
 
     extension (blob: dom.Blob) {
       def extractDataUrl: Future[String] = {
@@ -52,11 +52,11 @@ object PhoneApp {
     div(
       "phone",
 
-      websocket.inEvents.collect { case PhoneMessage.ComputerAskedPicture(computerId, movieId) =>
-        computerId -> movieId
+      websocket.inEvents.collect { case PhoneMessage.ComputerAskedPicture(computerId, movieId, requestId) =>
+        (computerId, movieId, requestId)
       } --> takePictureBus.writer,
       takePictureBus.events
-        .flatMapSwitch { (computerId, movieId) =>
+        .flatMapSwitch { (computerId, movieId, requestId) =>
           EventStream.fromFuture(for {
             stream <- dom.window.navigator.mediaDevices
               .getUserMedia(new MediaStreamConstraints {
@@ -67,6 +67,7 @@ object PhoneApp {
             imageCapture = ImageCapture(track)
             blob <- imageCapture.takePhoto().toFuture
             _    <- imagesService.postImage(movieId, computerId, blob)
+            _ = websocket.outWriter.onNext(PhoneMessage.UploadedPictureFor(computerId, movieId, requestId))
           } yield ())
         } --> Observer.empty,
 

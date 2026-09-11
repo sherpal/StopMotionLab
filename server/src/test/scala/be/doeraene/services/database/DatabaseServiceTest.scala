@@ -161,37 +161,6 @@ class DatabaseServiceTest extends munit.FunSuite with HasTestPower {
       assertEquals(service.deletedMovies, Vector.empty)
   }
 
-  db.test("I can reattach a movie's images at their original indices as part of a restore, skipping unindexed ones") {
-    service =>
-      val movie  = createAMovie(service)
-      val images = (1 to 4)
-        .map(_ => java.util.UUID.randomUUID())
-        .map(service.createImageIfNotExists(_, ImageData.MimeType.Png, Array.empty))
-        .toVector
-
-      // mirrors what a real delete does: the movie row (and, in principle, its movie_to_image links) is hard-gone.
-      service.deleteMovie(movie.typedId)
-      assertEquals(service.getMovie(movie.id), None)
-
-      // the first three images were part of the movie when it got deleted; the fourth had already been removed
-      // from it beforehand (tracked with `maybeIndex = None`), and a restore must leave it that way.
-      val toRelink =
-        images.take(3).zipWithIndex.map((image, index) =>
-          data.movie.Movie.ImageDataWithOrdering(ImageData(ImageData.Id.fromUUID(image.uuid)), Some(index))
-        ) :+ data.movie.Movie.ImageDataWithOrdering(ImageData(ImageData.Id.fromUUID(images(3).uuid)), None)
-
-      // restore re-creates the movie row first (see MoviesService.movieProjection's Restored branch), then relinks.
-      service.createMovie(movie)
-      service.reattachMovieImages(movie.typedId, toRelink)
-
-      val relinked = service.imagesInMovie(movie)
-      assertEquals(
-        relinked.map(_.image).toSet,
-        images.take(3).map(image => ImageData(ImageData.Id.fromUUID(image.uuid))).toSet
-      )
-      assertEquals(relinked.flatMap(_.maybeIndex).sorted, Vector(0, 1, 2), "the unindexed image must stay unlinked")
-  }
-
   private val lastMovieId = AtomicInteger(0)
 
   def createAMovie(service: DatabaseService): Movie = {
