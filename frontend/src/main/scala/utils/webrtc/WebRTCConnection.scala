@@ -172,6 +172,26 @@ object WebRTCConnection {
       _ = outWriter.onNext(WebRTCCommProtocol.SendOffer(Offer(offer.sdp), consumerId))
     } yield ()
 
+    /** Swaps the outgoing video for a fresh track — e.g. when the phone switches to a different physical
+      * camera — by asking the peer connection's existing sender to replace it in place. This is plain
+      * WebRTC track-replacement, so it doesn't require any SDP renegotiation with the consumer and the call
+      * keeps flowing without interruption.
+      *
+      * Relies on this provider only ever carrying a single (video, no audio) track, so there is exactly one
+      * sender to update; see the constructor and `init` above.
+      */
+    def replaceTrack(newStream: MediaStream): Future[Unit] =
+      newStream.getVideoTracks().headOption match {
+        case None => Future.successful(())
+        case Some(newTrack) =>
+          val senders = pc.asInstanceOf[js.Dynamic].applyDynamic("getSenders")().asInstanceOf[js.Array[js.Dynamic]]
+          senders.headOption match {
+            case None => Future.successful(())
+            case Some(sender) =>
+              sender.applyDynamic("replaceTrack")(newTrack).asInstanceOf[js.Promise[Unit]].toFuture
+          }
+      }
+
   }
 
 }

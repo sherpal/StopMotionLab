@@ -54,6 +54,42 @@ object AppStyles {
       |  0%, 100% { opacity: 1; }
       |  50% { opacity: 0.35; }
       |}
+      |.smlab-phone-app {
+      |  position: fixed;
+      |  inset: 0;
+      |  display: flex;
+      |  flex-direction: column;
+      |  gap: 12px;
+      |  padding: 12px;
+      |  box-sizing: border-box;
+      |  background: #000;
+      |}
+      |.smlab-phone-video-wrap {
+      |  flex: 1 1 auto;
+      |  min-height: 0;
+      |  display: flex;
+      |  align-items: center;
+      |  justify-content: center;
+      |}
+      |.smlab-phone-video {
+      |  max-width: 100%;
+      |  max-height: 100%;
+      |  object-fit: contain;
+      |  border-radius: 12px;
+      |}
+      |.smlab-phone-placeholder {
+      |  display: flex;
+      |  flex-direction: column;
+      |  align-items: center;
+      |  gap: 8px;
+      |  opacity: 0.6;
+      |  color: white;
+      |}
+      |.smlab-phone-controls {
+      |  flex: 0 0 auto;
+      |  display: flex;
+      |  justify-content: center;
+      |}
       |""".stripMargin
 
   /** Mount once, near the root of the application. */
