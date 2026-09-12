@@ -14,7 +14,8 @@ object MovieDisplay {
     * thumbnails to scrub through it, and a large preview of the frame currently scrolled to.
     */
   def apply(movieId: Movie.Id, imagesSignal: Signal[Vector[ImageData]])(using
-      movieService: MoviesService
+      movieService: MoviesService,
+      undoStack: UndoStack
   )(using
       ImagesService,
       ExecutionContext

@@ -11,8 +11,10 @@ import data.movie.Movie.ImageDataWithOrdering
 import services.{ImagesService, MoviesService}
 import utils.websocket.JsonWebSocket
 import urldsl.language.dummyErrorImpl.*
+import org.scalajs.dom
 
 import scala.concurrent.ExecutionContext
+import scala.scalajs.js
 
 object ComputerApp {
 
@@ -29,6 +31,21 @@ object ComputerApp {
     val (updateSubscription, updatesCancellation) = movieService.subscribe(movieId)
 
     val movieVar: Var[Movie] = Var(Movie.entityInfo.initialState)
+
+    // Best-effort "undo" for whatever happened since this movie was opened -- see UndoStack's own doc for the
+    // overall design. `given` so MovieDisplay and everything it renders picks it up without threading it manually.
+    given undoStack: UndoStack = new UndoStack()
+
+    // Every command that mutates the movie and is issued from a button click marks `undoStack` and pushes its own
+    // precise undo action right when it succeeds (see StoryboardSelectionToolbar and the rename handling below).
+    // The one mutation that *doesn't* come from a button here is a photo landing from the phone -- so instead this
+    // watches every state update for one that looks like a pure append (same images, one more at the end) and,
+    // if it wasn't already accounted for by a local command, treats it as "a photo got added" and makes that
+    // undoable too.
+    val movieUpdatePairsSignal: Signal[(Movie, Movie)] =
+      updateSubscription.scanLeft(Movie.entityInfo.initialState -> Movie.entityInfo.initialState) {
+        case ((_, latest), next) => (latest, next)
+      }
 
     val initiallyLoaded: Signal[Boolean] = movieVar.signal.map(_.id != Movie.Id.dummy)
 
@@ -73,6 +90,8 @@ object ComputerApp {
         _ => child.text <-- websocket.isOpenSignal.map(if _ then "Connecté" else "Connexion…")
       )
 
+    val renameBus = new EventBus[String]
+
     def headerBar: HtmlElement =
       Bar.of(
         _.design             := BarDesign.Header,
@@ -84,13 +103,7 @@ object ComputerApp {
             Router.router.moveTo("/" ++ (base / entry.DefinedRoutes.home).createPath())
           )
         ),
-        _ =>
-          ModifiableTitle.h3(
-            movieVar.signal.map(_.name),
-            Observer[String](newName => movieService.sendCommand(movieId, Movie.Command.ChangeName(newName, _)))
-              .filter(_.nonEmpty)
-              .contramap[String](_.trim)
-          ),
+        _ => ModifiableTitle.h3(movieVar.signal.map(_.name), renameBus.writer),
         _.slots.endContent := div(
           display.flex,
           alignItems.center,
@@ -190,7 +203,74 @@ object ComputerApp {
       ),
 
       onUnmountCallback(_ => updatesCancellation()),
-      updateSubscription --> movieVar.writer
+      updateSubscription --> movieVar.writer,
+
+      renameBus.events
+        .filter(_.nonEmpty)
+        .map(_.trim)
+        .filter(_.nonEmpty)
+        .withCurrentValueOf(movieVar.signal.map(_.name))
+        .filter((newName, oldName) => newName != oldName)
+        .flatMapSwitch { (newName, oldName) =>
+          undoStack.markLocalChange()
+          EventStream
+            .fromFuture(movieService.sendCommand(movieId, Movie.Command.ChangeName(newName, _)))
+            .collect { case Some(true) => oldName }
+        } --> Observer[String] { oldName =>
+        undoStack.push(
+          UndoAction(
+            "le renommage du film",
+            () => movieService.sendCommand(movieId, Movie.Command.ChangeName(oldName, _)).map(_.contains(true))
+          )
+        )
+      },
+
+      // Passive detection of images added from the phone: see the comment on `movieUpdatePairsSignal` above.
+      movieUpdatePairsSignal.changes
+        .filter { case (previous, _) => previous.id != Movie.Id.dummy }
+        --> Observer[(Movie, Movie)] { case (previous, next) =>
+        if !undoStack.consumeLocalChange() then {
+          val oldImages = previous.sortedImages
+          val newImages = next.sortedImages
+          if newImages.length > oldImages.length && newImages.take(oldImages.length) == oldImages then
+            newImages.drop(oldImages.length).zipWithIndex.foreach { case (image, offset) =>
+              val atIndex = oldImages.length + offset
+              undoStack.push(
+                UndoAction(
+                  "l'ajout d'une photo",
+                  () =>
+                    movieService
+                      .sendCommand(movieId, Movie.Command.RemoveImages(Vector(image.id -> atIndex), _))
+                      .map(_.contains(true))
+                )
+              )
+            }
+        }
+      },
+
+      // Ctrl+Z (or Cmd+Z on macOS) triggers the same undo as the button, unless the user is typing somewhere --
+      // renaming the movie or typing in the delete-confirmation input -- in which case the browser's own
+      // text-field undo should take over instead.
+      onMountUnmountCallbackWithState(
+        { _ =>
+          val listener: js.Function1[dom.KeyboardEvent, Any] = { event =>
+            val isUndoCombo = (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.equalsIgnoreCase("z")
+            if isUndoCombo then {
+              val active         = dom.document.activeElement
+              val isTypingTarget = active != null && (active.tagName == "INPUT" || active.tagName == "TEXTAREA")
+              if !isTypingTarget then {
+                event.preventDefault()
+                undoStack.undo()
+              }
+            }
+          }
+          dom.document.defaultView.addEventListener("keydown", listener)
+          listener
+        },
+        { (_, maybeListener) =>
+          maybeListener.foreach(dom.document.defaultView.removeEventListener("keydown", _))
+        }
+      )
     )
   }
 
