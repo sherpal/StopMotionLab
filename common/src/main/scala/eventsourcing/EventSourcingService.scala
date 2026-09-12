@@ -33,6 +33,17 @@ class EventSourcingService(
 
   private val subscriptionCount = AtomicInteger()
 
+  /** Calling this function will make it so that the specified `replyTo` actor will receive a message every time the
+    * entity changes
+    * @param id
+    *   entity id to listen to
+    * @param entityKind
+    *   kind of entity
+    * @param replyTo
+    *   actor that will receive the updates
+    * @return
+    *   a subscription that can be called (and should be in due time) to stop receiving the notifications.
+    */
   def subscribe[State](
       id: Int,
       entityKind: EntityKind[?, State],
@@ -43,6 +54,16 @@ class EventSourcingService(
     Subscription(() => supervisor.send(Supervisor.Unsubscribe(id, entityKind, subscriptionName)))
   }
 
+  /** Calling this function will make it so that the specified `replyTo` actor will receive a message every time the
+    * projection handles an event. The message sent is the entity of the id who triggered the event.
+    *
+    * @param projectionName
+    *   name of the projection to listen to (not guarded against spelling mistake!)
+    * @param replyTo
+    *   actor that will receive the updates
+    * @return
+    *   a subscription that can be called (and should be in due time) to stop receiving the notifications.
+    */
   def subscribeToProjection(
       projectionName: String,
       replyTo: castor.Actor[Int]

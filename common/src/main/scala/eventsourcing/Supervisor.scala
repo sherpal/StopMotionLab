@@ -33,66 +33,79 @@ private[eventsourcing] class Supervisor(
     def poke(entityId: Int): Unit = ref.send(entityId)
   }
 
-  private class TheState(
+  private def handleCommandEnvelope(commandEnvelope: EntityCommand[?, ?, ?], currentState: TheState): TheState = {
+    val id         = commandEnvelope.id
+    val entityInfo = commandEnvelope.entityInfo
+    val command    = commandEnvelope.command
+
+    val TheState(entities, subscriptions, projectionSubscriptions) = currentState
+
+    val entityType = entityInfo.entityKind.name
+    entities.get((id, entityType)) match {
+      case None =>
+        val actor =
+          EventSourcedActor(
+            id,
+            entityInfo,
+            eventStore,
+            config,
+            castor.ProxyActor[Supervisor.FromEventSourcedActor, SupervisorMessage](identity, this)
+          )
+        actor.send(EventSourcedActor.ActorCommand.LoadNext())
+        actor.send(EventSourcedActor.ActorCommand.Wrapper(command))
+
+        val trimmedEntities = if entities.size >= config.maxInMemoryEntities then {
+          val liveEntities = entities.toVector.collect { case (value, slot: EntitySlot.Live) => (value, slot) }
+          liveEntities.minByOption(_._2.lastAccessed) match {
+            case Some(toPassivate) =>
+              toPassivate._2.actor.send(EventSourcedActor.ActorCommand.Passivate())
+              entities.updated(toPassivate._1, EntitySlot.Passivating(Vector.empty))
+            case None => entities
+          }
+        } else entities
+
+        TheState(
+          trimmedEntities + ((id = id, entityType = entityType) -> EntitySlot.Live(
+            actor = actor.asInstanceOf[castor.Actor[eventsourcing.EventSourcedActor.ActorCommand[?]]],
+            lastAccessed = System.currentTimeMillis()
+          )),
+          subscriptions,
+          projectionSubscriptions
+        )
+      case Some(EntitySlot.Live(actor, _)) =>
+        actor.send(EventSourcedActor.ActorCommand.Wrapper(command))
+        TheState(
+          entities.updated((id, entityType), EntitySlot.Live(actor, System.currentTimeMillis())),
+          subscriptions,
+          projectionSubscriptions
+        )
+      case Some(EntitySlot.Passivating(commands)) =>
+        TheState(
+          entities.updated((id, entityType), EntitySlot.Passivating(commands :+ commandEnvelope)),
+          subscriptions,
+          projectionSubscriptions
+        )
+    }
+
+  }
+
+  private case class TheState(
       entities: Map[(id: Int, entityType: String), EntitySlot],
       subscriptions: Map[(id: Int, entityType: String), Vector[Subscription[?]]],
       projectionSubscriptions: Map[String, Vector[ProjectionSubscription]]
   ) extends State({
-        case commandEnvelope @ EntityCommand(id, entityInfo, command) =>
-          val entityType = entityInfo.entityKind.name
-          entities.get((id, entityType)) match {
-            case None =>
-              val actor =
-                EventSourcedActor(
-                  id,
-                  entityInfo,
-                  eventStore,
-                  config,
-                  castor.ProxyActor[Supervisor.FromEventSourcedActor, SupervisorMessage](identity, this)
-                )
-              actor.send(EventSourcedActor.ActorCommand.LoadNext())
-              actor.send(EventSourcedActor.ActorCommand.Wrapper(command))
-
-              val trimmedEntities = if entities.size >= config.maxInMemoryEntities then {
-                val liveEntities = entities.toVector.collect { case (value, slot: EntitySlot.Live) => (value, slot) }
-                liveEntities.minByOption(_._2.lastAccessed) match {
-                  case Some(toPassivate) =>
-                    toPassivate._2.actor.send(EventSourcedActor.ActorCommand.Passivate())
-                    entities.updated(toPassivate._1, EntitySlot.Passivating(Vector.empty))
-                  case None => entities
-                }
-              } else entities
-
-              TheState(
-                trimmedEntities + ((id = id, entityType = entityType) -> EntitySlot.Live(
-                  actor = actor.asInstanceOf[castor.Actor[eventsourcing.EventSourcedActor.ActorCommand[?]]],
-                  lastAccessed = System.currentTimeMillis()
-                )),
-                subscriptions,
-                projectionSubscriptions
-              )
-            case Some(EntitySlot.Live(actor, _)) =>
-              actor.send(EventSourcedActor.ActorCommand.Wrapper(command))
-              TheState(
-                entities.updated((id, entityType), EntitySlot.Live(actor, System.currentTimeMillis())),
-                subscriptions,
-                projectionSubscriptions
-              )
-            case Some(EntitySlot.Passivating(commands)) =>
-              TheState(
-                entities.updated((id, entityType), EntitySlot.Passivating(commands :+ commandEnvelope)),
-                subscriptions,
-                projectionSubscriptions
-              )
-          }
+        case commandEnvelope @ EntityCommand(_, _, _) =>
+          handleCommandEnvelope(commandEnvelope, TheState(entities, subscriptions, projectionSubscriptions))
         case EntityIsNowPassive(id, entityType) =>
-          entities.get((id, entityType)) match {
-            case None                                   => ()
-            case Some(EntitySlot.Live(_, _))            => ()
-            case Some(EntitySlot.Passivating(commands)) =>
-              commands.foreach(send) // sending to self the waiting commands
+          val commandsToHandle = entities.get((id, entityType)) match {
+            case None                                   => Vector.empty
+            case Some(EntitySlot.Live(_, _))            => Vector.empty
+            case Some(EntitySlot.Passivating(commands)) => commands
           }
-          TheState(entities.removed((id, entityType)), subscriptions, projectionSubscriptions)
+
+          commandsToHandle.foldLeft(
+            TheState(entities.removed((id, entityType)), subscriptions, projectionSubscriptions)
+          )((accState, nextCommand) => handleCommandEnvelope(nextCommand, accState))
         case EntityUpdate(id, entityType, entity, sequenceNumber) =>
           subscriptions
             .getOrElse((id, entityType), Vector.empty)
