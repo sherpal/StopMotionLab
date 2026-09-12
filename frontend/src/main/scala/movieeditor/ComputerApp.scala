@@ -129,6 +129,17 @@ object ComputerApp {
           Some(providerId)
         } --> currentProviderIdVar.writer,
 
+      // The provider (phone) disconnected: if it's the one currently shown, reset to None so the UI drops the
+      // (now-dead) video feed and shows the QR code again instead of a frozen preview. Guarded by an identity
+      // check so a late/stale notification can't clobber a different provider that has since reconnected.
+      websocket.inEvents
+        .collect { case ComputerMessage.WebRTCToComputerWrapper(WebRTCCommProtocol.OfferClosed(providerId)) =>
+          providerId
+        }
+        .withCurrentValueOf(currentProviderIdVar.signal)
+        .collect { case (closedId, Some(currentId)) if closedId == currentId => Option.empty[String] }
+        --> currentProviderIdVar.writer,
+
       askPictureEvents --> websocket.outWriter,
       askPictureEvents.map(_.requestId) --> inFlightPictureRequests.updater[Long](_ + _),
       websocket.inEvents.collect { case ComputerMessage.PhoneTookPicture(requestId) =>

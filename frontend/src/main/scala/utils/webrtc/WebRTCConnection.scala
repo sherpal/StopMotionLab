@@ -73,6 +73,11 @@ trait WebRTCConnection(using ExecutionContext) {
 
   protected def recipientId: String
 
+  /** Tears down the underlying peer connection. Not tied to Laminar's ownership since `pc` is a plain JS object, so
+    * callers must invoke this explicitly (e.g. on unmount) instead of relying on it being cleaned up automatically.
+    */
+  def close(): Unit = pc.close()
+
 }
 
 object WebRTCConnection {

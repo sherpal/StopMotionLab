@@ -75,6 +75,10 @@ object CameraPreviewCard {
           case Success(())        => println(s"Web rtc to phone $providerId intialized")
         }
       },
+      // Whether this feed goes away because the provider disconnected (OfferClosed, handled by
+      // ComputerApp resetting currentProviderIdSignal) or a new one replaced it, the peer connection
+      // itself is a plain JS object outside Laminar's ownership and won't clean itself up.
+      onUnmountCallback(_ => webRTCConnection.close()),
       socketMessages --> webRTCConnection.inMessageObserver
     )
   }

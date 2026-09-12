@@ -109,6 +109,12 @@ class ConnectedClientsService(using castor.Context, cask.util.Logger) {
         },
         { case cask.Ws.Close(_, _) =>
           imageProviders.updateAndGet(_ - imageProvider.id)
+          // Let the computer know its camera just went away, so it can drop the video feed and show the QR
+          // code again instead of being stuck showing a frozen/dead preview.
+          movieEditors
+            .get()
+            .get(imageProvider.connectedTo)
+            .foreach(_.send(ComputerMessage.WebRTCToComputerWrapper(WebRTCCommProtocol.OfferClosed(imageProvider.id.value))))
           ()
         }
       )
