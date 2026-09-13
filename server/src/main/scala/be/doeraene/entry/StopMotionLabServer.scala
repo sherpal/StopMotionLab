@@ -19,7 +19,8 @@ import data.app.AppConfig
 import eventsourcing.EventSourcingService
 import io.undertow.Undertow
 
-import java.awt.Desktop
+import java.awt.image.BufferedImage
+import java.awt.{Color, Desktop, MenuItem, PopupMenu, RenderingHints, SystemTray, TrayIcon}
 import java.net.URI
 import java.util.concurrent.ExecutorService
 import javax.net.ssl.SSLContext
@@ -74,8 +75,11 @@ object StopMotionLabServer extends cask.MainRoutes {
       .setHandler(defaultHandler)
       .build
     server.start()
-    // only auto-open a browser in prod: in dev, Vite is serving the actual page on its own port
-    if appConfig.isProd then openBrowser()
+    // only in prod: in dev, Vite is serving the actual page on its own port, and there's a terminal handy to Ctrl+C
+    if appConfig.isProd then {
+      openBrowser()
+      setupTrayIcon()
+    }
     // register an on exit hook to stop the server
     Runtime.getRuntime.addShutdownHook(Thread(() => {
       server.stop()
@@ -100,6 +104,51 @@ object StopMotionLabServer extends cask.MainRoutes {
       case e: Exception =>
         println(s"[StopMotionLabServer] Couldn't auto-open a browser ($e); open $url manually.")
     }
+  }
+
+  /** A packaged app-image has no terminal to Ctrl+C: this is the only way most people would have to stop it short
+    * of digging into their OS's task/process manager. Best-effort, same fallback philosophy as `openBrowser`.
+    */
+  private def setupTrayIcon(): Unit = {
+    if (!SystemTray.isSupported) {
+      println(
+        "[StopMotionLabServer] No system tray available on this machine; to quit, close this process from your OS's task/process manager."
+      )
+      return
+    }
+
+    val openItem = MenuItem("Open in browser")
+    openItem.addActionListener(_ => openBrowser())
+
+    val quitItem = MenuItem("Quit")
+    // System.exit runs the shutdown hook registered in `main`, which stops the server and its executors cleanly.
+    quitItem.addActionListener(_ => System.exit(0))
+
+    val menu = PopupMenu()
+    menu.add(openItem)
+    menu.add(quitItem)
+
+    val trayIcon = TrayIcon(trayIconImage(), "StopMotionLab", menu)
+    trayIcon.setImageAutoSize(true)
+    trayIcon.addActionListener(_ => openBrowser()) // double-click (Windows/Linux) / click (macOS) on the icon itself
+
+    try SystemTray.getSystemTray.add(trayIcon)
+    catch {
+      case e: Exception =>
+        println(
+          s"[StopMotionLabServer] Couldn't add a system tray icon ($e); to quit, use your OS's task/process manager."
+        )
+    }
+  }
+
+  private def trayIconImage(size: Int = 16): BufferedImage = {
+    val image    = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
+    val graphics = image.createGraphics()
+    graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+    graphics.setColor(Color(0x4a, 0x6c, 0xf5))
+    graphics.fillOval(1, 1, size - 2, size - 2)
+    graphics.dispose()
+    image
   }
 
   private def indexHtmlStaticResource = cask.StaticResource(

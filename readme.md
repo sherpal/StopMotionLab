@@ -14,6 +14,10 @@ java -DisProd=true -jar dist/app.jar
   `MakeSslContext`/`LocalServerCertificate`) -- a phone that installs the CA once (served at `GET /api/ca-cert`)
   trusts every future certificate automatically, even after this machine changes Wi-Fi networks;
 - auto-opens the app in the default browser on startup, so there's no URL/port to type in by hand;
+- adds a system tray icon with "Open in browser" and "Quit" -- since a packaged app has no terminal to Ctrl+C,
+  this is how you stop it. If no tray is available (some Linux setups without a notification area), it falls
+  back to printing a message: close the process from your OS's task/process manager instead (Task Manager on
+  Windows, Activity Monitor on macOS, `xkill`/`kill` on Linux);
 - stores its data (`db/`, `storage/`, `certs/`) next to wherever the running jar/app physically lives
   (`AppPaths.dataDir`), rather than relative to whatever directory it happened to be launched from -- important
   since double-clicking a packaged app doesn't reliably set the working directory the way running from a
