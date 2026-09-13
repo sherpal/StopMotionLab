@@ -1,6 +1,7 @@
 import org.scalajs.sbtplugin.ScalaJSPlugin.autoImport.scalaJSUseMainModuleInitializer
 
 import java.nio.charset.StandardCharsets
+import scala.sys.process.Process
 
 ThisBuild / version := "0.1.0-SNAPSHOT"
 
@@ -90,7 +91,21 @@ lazy val server = project
       "com.google.zxing" % "core"           % "3.5.4",
       "org.bouncycastle" % "bcpkix-jdk18on" % "1.86" // mints the local self-signed TLS certificate authority/leaf certs
     ) ++ databaseStuff,
-    fork := true
+    fork := true,
+
+    assembly / assemblyMergeStrategy := {
+      case "module-info.class" =>
+        MergeStrategy.discard
+
+      case PathList("META-INF", "versions", _, "module-info.class") =>
+        MergeStrategy.discard
+
+      case PathList("META-INF", "versions", _, "OSGI-INF", "MANIFEST.MF") =>
+        MergeStrategy.discard
+
+      case x =>
+        MergeStrategy.defaultMergeStrategy(x)
+    }
   )
   .dependsOn(common.jvm(commonScalaVersion))
 
@@ -141,7 +156,90 @@ lazy val frontend = project
 
       (Compile / fastLinkJS).value
     },
+    Compile / fullLinkJS := Def.uncached {
+      val targetDir = baseDirectory.value / "generated" / "opt"
+      val outputDir = (Compile / fullLinkJS / scalaJSLinkerOutputDirectory).value
+
+      IO.createDirectory(targetDir)
+
+      IO.copyFile(
+        outputDir / "main.js",
+        targetDir / "main.js"
+      )
+
+      IO.copyFile(
+        outputDir / "main.js.map",
+        targetDir / "main.js.map"
+      )
+
+      val outputFile   = baseDirectory.value / "scala-metadata.js"
+      val frontendName = name.value
+
+      IO.writeLines(
+        outputFile,
+        s"""
+           |const scalaVersion = "$commonScalaVersion"
+           |const frontendName = "${frontendName.toLowerCase}"
+           |
+           |exports.scalaMetadata = {
+           |  scalaVersion: scalaVersion,
+           |  frontendName: frontendName,
+           |}
+           |""".stripMargin.split("\n").toList,
+        StandardCharsets.UTF_8
+      )
+
+      (Compile / fullLinkJS).value
+    },
 
     esModule
   )
   .dependsOn(common.js(commonScalaVersion))
+
+val buildFrontend = taskKey[Unit]("Build frontend")
+
+Global / buildFrontend := Def.uncached {
+  /*
+  To build the frontend, we do the following things:
+  - fullLinkJS the frontend sub-module
+  - run npm ci in the frontend directory (might not be required)
+  - package the application with vite-js (output will be in the resources of the server sub-module)
+   */
+  (frontend / Compile / fullLinkJS).value
+  val npmCiExit =
+    Process(Utils.npm :: "ci" :: Nil, cwd = baseDirectory.value / "frontend").run().exitValue()
+  if (npmCiExit > 0) {
+    throw new IllegalStateException(s"npm ci failed. See above for reason")
+  }
+
+  println(s"Running npm run build in ${baseDirectory.value / "frontend"}")
+  val buildExit = Process(
+    Utils.npm :: "run" :: "build" :: Nil,
+    cwd = baseDirectory.value / "frontend"
+  ).run().exitValue()
+  if (buildExit > 0) {
+    throw new IllegalStateException(s"Building frontend failed. See above for reason")
+  }
+
+  IO.copyDirectory(
+    baseDirectory.value / "frontend" / "dist",
+    baseDirectory.value / "server" / "src" / "main" / "resources" / "static"
+  )
+}
+
+(server / assembly) := (server / assembly).dependsOn(Global / buildFrontend).value
+
+val packageApplication = taskKey[File]("Package the whole application into a fat jar")
+
+Global / packageApplication := Def.uncached {
+  /*
+  To package the whole application into a fat jar, we do the following things:
+  - call sbt assembly to make the fat jar for us (config in the server sub-module settings)
+  - we move it to the ./dist folder so that the Dockerfile can be independent of Scala versions and other details
+   */
+  val fatJar = fileConverter.value.toPath((server / assembly).value).toFile
+  println(s"Fat har is $fatJar")
+  val target = baseDirectory.value / "dist" / "app.jar"
+  IO.copyFile(fatJar, target)
+  target
+}

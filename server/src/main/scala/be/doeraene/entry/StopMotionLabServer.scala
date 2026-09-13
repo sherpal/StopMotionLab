@@ -1,12 +1,20 @@
 package be.doeraene.entry
 
-import be.doeraene.routes.{CommandRoutes, ImagesRoutes, MoviesRoutes, PhoneConnectionRoutes, VideoFluxRoutes}
+import be.doeraene.routes.{
+  CommandRoutes,
+  ImagesRoutes,
+  MoviesRoutes,
+  PhoneConnectionRoutes,
+  StaticResourcesWithContentType,
+  VideoFluxRoutes
+}
 import be.doeraene.services.connectedclients.ConnectedClientsService
 import be.doeraene.services.database.DatabaseService
 import be.doeraene.services.filestorage.FileStorageService
 import be.doeraene.services.images.ImagesService
 import be.doeraene.services.movies.MoviesService
 import cask.main.{Main, Routes}
+import data.app.AppConfig
 import eventsourcing.EventSourcingService
 import io.undertow.Undertow
 
@@ -15,7 +23,13 @@ import java.util.concurrent.ExecutorService
 import javax.net.ssl.SSLContext
 import scala.util.chaining.*
 
+//noinspection TypeAnnotation
 object StopMotionLabServer extends cask.MainRoutes {
+
+  private lazy val appConfig = AppConfig(
+    isProd = Option(java.lang.System.getProperty("isProd")).fold(false)(_.toBoolean),
+    port = port
+  )
 
   given DatabaseService      = DatabaseService(Paths.get("./data/db"))
   given EventSourcingService =
@@ -34,7 +48,7 @@ object StopMotionLabServer extends cask.MainRoutes {
       VideoFluxRoutes(),
       ImagesRoutes(),
       MoviesRoutes(),
-      PhoneConnectionRoutes(),
+      PhoneConnectionRoutes(appConfig),
       CommandRoutes(Seq(summon[MoviesService].commandRouter))
     )
 
@@ -46,13 +60,12 @@ object StopMotionLabServer extends cask.MainRoutes {
 
   private lazy val sslContext: SSLContext = MakeSslContext()
 
-  private lazy val isProd = Option(java.lang.System.getProperty("isProd")).fold(false)(_.toBoolean)
-
   override def main(args: Array[String]): Unit = {
     if (!verbose) Main.silenceJboss()
     val server = Undertow.builder
       .tap(builder =>
-        if isProd then builder.addHttpsListener(port, host, sslContext) else builder.addHttpListener(port, host)
+        if appConfig.isProd then builder.addHttpsListener(appConfig.port, host, sslContext)
+        else builder.addHttpListener(appConfig.port, host)
       )
       .setHandler(defaultHandler)
       .build
@@ -65,9 +78,17 @@ object StopMotionLabServer extends cask.MainRoutes {
     }))
   }
 
+  private def indexHtmlStaticResource = cask.StaticResource(
+    "static/index.html",
+    getClass.getClassLoader,
+    List("Content-Type" -> "text/html; charset=utf-8")
+  )
+
+  @StaticResourcesWithContentType("/static", indexHtmlStaticResource)
+  def staticResourceRoutes() = "static"
+
   @cask.get("/")
-  def hello() =
-    "Hello World!"
+  def index() = cask.Redirect("/static")
 
   initialize()
 

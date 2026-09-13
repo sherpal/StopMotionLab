@@ -55,5 +55,7 @@ frontend/public/les_trois.jpg
 frontend/node_modules/
 
 /data/
+server/src/main/resources/static/
 
 /my-change.patch
+/frontend/dist/

@@ -2,13 +2,15 @@ package be.doeraene.routes
 
 import be.doeraene.qrcode.QrCode
 import be.doeraene.utils.NetworkUtils
+import data.app.AppConfig
 
 import java.nio.file.{Files, Path}
 
-/** Lets the "computer" side of the app find out how a phone on the same Wi-Fi network can reach it, so it can
-  * display a QR code that a phone camera can scan to open the pairing page directly. */
+/** Lets the "computer" side of the app find out how a phone on the same Wi-Fi network can reach it, so it can display a
+  * QR code that a phone camera can scan to open the pairing page directly.
+  */
 //noinspection TypeAnnotation
-class PhoneConnectionRoutes(using cask.util.Logger) extends cask.Routes with Helpers {
+class PhoneConnectionRoutes(config: AppConfig)(using cask.util.Logger) extends cask.Routes with Helpers {
 
   // Kept in sync with be.doeraene.entry.MakeSslContext, which writes the CA's public cert there.
   private val caCertFile: Path = Path.of("./data/certs/ca.crt")
@@ -16,8 +18,8 @@ class PhoneConnectionRoutes(using cask.util.Logger) extends cask.Routes with Hel
   // The scheme/port a phone should hit are overridable, since in dev the browser-facing origin is the Vite dev
   // server (fronting this backend), not this process's own bind port.
   private def publicOrigin: Option[String] = {
-    val scheme = sys.props.getOrElse("publicScheme", "https")
-    val port   = sys.props.getOrElse("publicPort", "3000") // todo: change that
+    val scheme = "https"
+    val port   = if config.isProd then config.port else 3000 // 3000 is Vite's port
     NetworkUtils.localNetworkAddress.map(ip => s"$scheme://$ip:$port")
   }
 
@@ -46,8 +48,7 @@ class PhoneConnectionRoutes(using cask.util.Logger) extends cask.Routes with Hel
   // The content type is what makes iOS/Android offer to install it as a certificate rather than just downloading it.
   @cask.get("api/ca-cert")
   def caCert() =
-    if !Files.exists(caCertFile) then
-      cask.Response("no certificate authority generated yet".getBytes, statusCode = 503)
+    if !Files.exists(caCertFile) then cask.Response("no certificate authority generated yet".getBytes, statusCode = 503)
     else
       cask.Response(
         Files.readAllBytes(caCertFile),
