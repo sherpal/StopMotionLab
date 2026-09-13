@@ -38,7 +38,7 @@ class ImagesService(maybeHost: Option[String])(using httpClient: HttpClient)(usi
       .toFuture
 
   def getImageBytes(imageId: ImageData.Id): Future[(ImageData.MimeType, Array[Byte])] =
-    httpClient.get.bytes(api / "images" / segment[ImageData.Id])(imageId).map { (contentType, bytes) =>
+    httpClient.get.bytes(root / "images" / segment[ImageData.Id])(imageId).map { (contentType, bytes) =>
       ImageData.MimeType.unsafeFromString(contentType) -> bytes
     }
 

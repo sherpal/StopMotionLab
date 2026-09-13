@@ -13,7 +13,7 @@ object MovieDisplay {
   /** The goal of this component is to display the work in progress movie: a selection toolbar, the filmstrip of
     * thumbnails to scrub through it, and a large preview of the frame currently scrolled to.
     */
-  def apply(movieId: Movie.Id, imagesSignal: Signal[Vector[ImageData]])(using
+  def apply(movieId: Movie.Id, imagesSignal: Signal[Vector[ImageData]], imagesPerSecondObserver: Observer[Int])(using
       movieService: MoviesService,
       undoStack: UndoStack
   )(using
@@ -42,7 +42,7 @@ object MovieDisplay {
           gap.px := 16,
 
           StoryboardSelectionToolbar(movieId, selectedIndices, imagesSignal),
-          StoryboardImageStrip(imagesSignal, selectedIndices, scrollPositionVar),
+          StoryboardImageStrip(imagesSignal, selectedIndices, scrollPositionVar, imagesPerSecondObserver),
           StoryboardBigImageDisplay(scrollPositionVar.signal, imagesSignal)
         )
     )

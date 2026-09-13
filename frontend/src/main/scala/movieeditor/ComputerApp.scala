@@ -124,6 +124,8 @@ object ComputerApp {
         )
       )
 
+    val imagesPerSecondBus = new EventBus[Int]
+
     div(
       display <-- initiallyLoaded.map(if _ then "block" else "none"),
       padding.px := 16,
@@ -197,7 +199,8 @@ object ComputerApp {
         burstActive,
         encodingVar,
         inFlightPictureRequests.signal,
-        askPictureBus.writer
+        askPictureBus.writer,
+        imagesPerSecondBus.events.startWith(1)
       ),
 
       // Plain div on purpose: ui5-busy-indicator's own shadow DOM doesn't constrain slotted content to its host's
@@ -209,7 +212,8 @@ object ComputerApp {
         MovieDisplay(
           movieId,
           movieVar.signal
-            .map(_.images.sorted.collect { case ImageDataWithOrdering(imageData, Some(_)) => imageData })
+            .map(_.images.sorted.collect { case ImageDataWithOrdering(imageData, Some(_)) => imageData }),
+          imagesPerSecondBus.writer
         )
       ),
 

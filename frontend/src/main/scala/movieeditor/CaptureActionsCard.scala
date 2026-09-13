@@ -13,8 +13,8 @@ import scala.scalajs.js
 import scala.scalajs.js.JSConverters.JSRichIterableOnce
 import scala.util.{Failure, Success}
 
-/** The "Prise de vue" card: lets the user ask for a single picture, toggle a one-picture-per-second burst, and
-  * export the current frames as a downloadable webm video.
+/** The "Prise de vue" card: lets the user ask for a single picture, toggle a one-picture-per-second burst, and export
+  * the current frames as a downloadable webm video.
   */
 object CaptureActionsCard {
 
@@ -24,8 +24,11 @@ object CaptureActionsCard {
       burstActive: Var[Boolean],
       encodingVar: Var[Boolean],
       inFlightPictureRequestsSignal: Signal[Set[Long]],
-      askPictureObserver: Observer[Unit]
-  )(using imagesService: ImagesService)(using ExecutionContext): HtmlElement =
+      askPictureObserver: Observer[Unit],
+      imagesPerSecondSignal: Signal[Int]
+  )(using imagesService: ImagesService)(using ExecutionContext): HtmlElement = {
+    val createMovieBus = new EventBus[Unit]
+
     Card.of(
       _ => display.block,
       _ => width.percent := 100,
@@ -64,7 +67,11 @@ object CaptureActionsCard {
               _.disabled <-- movieVar.signal
                 .map(_.images.isEmpty)
                 .combineWithFn(burstActive.signal.combineWithFn(encodingVar.signal)(_ || _))(_ || _),
-              _.events.onClick.preventDefault.mapToUnit --> Observer[Unit](_ => downloadAsVideo(movieVar, encodingVar))
+              _.events.onClick.preventDefault.mapToUnit --> createMovieBus.writer,
+              _ =>
+                createMovieBus.events.sample(imagesPerSecondSignal) --> Observer[Int](
+                  downloadAsVideo(movieVar, encodingVar, _)
+                )
             ),
             child.maybe <-- encodingVar.signal.map(
               Option.when(_)(
@@ -80,8 +87,8 @@ object CaptureActionsCard {
             Button.of(
               _ =>
                 child <-- burstActive.signal.map(if _ then
-                  span(Icon.of(_.name := IconName.stop, _ => marginRight := "0.5em"), "Arrêter rafale")
-                else span(Icon.of(_.name := IconName.record, _ => marginRight := "0.5em"), "Démarrer rafale")),
+                  span(Icon.of(_.name := IconName.stop, _ => marginRight := "0.5em"), "Arrêter photos")
+                else span(Icon.of(_.name := IconName.record, _ => marginRight := "0.5em"), "Photos en continu")),
               _.design <-- burstActive.signal.map(if _ then ButtonDesign.Negative else ButtonDesign.Default),
               _.events.onClick.mapToUnit --> burstActive.invertWriter,
               _ =>
@@ -96,8 +103,9 @@ object CaptureActionsCard {
           )
         )
     )
+  }
 
-  private def downloadAsVideo(movieVar: Var[Movie], encodingVar: Var[Boolean])(using
+  private def downloadAsVideo(movieVar: Var[Movie], encodingVar: Var[Boolean], imagesPerSecond: Int)(using
       imagesService: ImagesService
   )(using ExecutionContext): Unit = {
     encodingVar.set(true)
@@ -105,7 +113,7 @@ object CaptureActionsCard {
     Future
       .sequence(images.map(image => imagesService.getImageUrlEncoded(image.id)))
       .map(_.toJSArray)
-      .flatMap(utils.videoencoding.encodeToVideo(_, 1))
+      .flatMap(utils.videoencoding.encodeToVideo(_, imagesPerSecond))
       .onComplete {
         case Failure(exception) =>
           encodingVar.set(false)

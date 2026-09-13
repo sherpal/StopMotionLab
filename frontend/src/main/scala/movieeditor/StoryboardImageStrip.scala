@@ -10,17 +10,18 @@ import services.ImagesService
 
 import scala.scalajs.js
 
-/** The scrollable strip of thumbnails at the heart of the storyboard, with the scrollbar and play/stop controls
-  * used to move through it. Clicking a thumbnail selects it (plain click), extends the selection (shift-click),
-  * or toggles it (ctrl-click); `selectedIndicesVar` is shared with the [[StoryboardSelectionToolbar]] and
-  * `scrollPositionVar` with the [[StoryboardBigImageDisplay]].
+/** The scrollable strip of thumbnails at the heart of the storyboard, with the scrollbar and play/stop controls used to
+  * move through it. Clicking a thumbnail selects it (plain click), extends the selection (shift-click), or toggles it
+  * (ctrl-click); `selectedIndicesVar` is shared with the [[StoryboardSelectionToolbar]] and `scrollPositionVar` with
+  * the [[StoryboardBigImageDisplay]].
   */
 object StoryboardImageStrip {
 
   def apply(
       imagesSignal: Signal[Vector[ImageData]],
       selectedIndicesVar: Var[Set[Int]],
-      scrollPositionVar: Var[Int]
+      scrollPositionVar: Var[Int],
+      imagesPerSecondObserver: Observer[Int]
   )(using imagesService: ImagesService): HtmlElement = {
     val screenResizeBus = new EventBus[Unit]
 
@@ -71,9 +72,7 @@ object StoryboardImageStrip {
             .combineWith(selectedIndicesVar.signal)
             .map((images, selected) =>
               images.zipWithIndex
-                .map((image, index) =>
-                  displayImage(index, image, selected.contains(index), imageClickObserver(index))
-                )
+                .map((image, index) => displayImage(index, image, selected.contains(index), imageClickObserver(index)))
             ),
           onMountBind { ctx =>
             val el     = ctx.thisNode.ref
@@ -99,7 +98,8 @@ object StoryboardImageStrip {
       scrollBar(scrollPositionVar, imagesSignal.map(_.length)),
       playStopButtons(
         scrollPositionVar.updater[Unit]((current, _) => current + 1),
-        scrollPositionVar.signal.combineWithFn(imagesSignal.map(_.length))(_ >= _)
+        scrollPositionVar.signal.combineWithFn(imagesSignal.map(_.length))(_ >= _),
+        imagesPerSecondObserver
       ),
       onMountUnmountCallbackWithState(
         { _ =>
@@ -114,7 +114,11 @@ object StoryboardImageStrip {
     )
   }
 
-  private def playStopButtons(nextImageObserver: Observer[Unit], endReachedSignal: Signal[Boolean]): HtmlElement = {
+  private def playStopButtons(
+      nextImageObserver: Observer[Unit],
+      endReachedSignal: Signal[Boolean],
+      imagesPerSecondObserver: Observer[Int]
+  ): HtmlElement = {
     val imagesPerSecond = Var(1)
     val imagesRate      = imagesPerSecond.signal.map(1.0 / _).distinct
     val playingVar      = Var(false)
@@ -144,7 +148,8 @@ object StoryboardImageStrip {
         _.step := 1.0,
         _.value <-- imagesPerSecond.signal.map(_.toDouble),
         _.events.onChange.map(_.target.value.toInt) --> imagesPerSecond.writer,
-        _ => width.px := 70
+        _ => width.px := 70,
+        _ => imagesPerSecond.signal --> imagesPerSecondObserver
       )
     )
   }
