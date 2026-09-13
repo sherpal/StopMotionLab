@@ -68,21 +68,20 @@ object PhoneApp {
     def stopStream(streamOpt: Option[MediaStream]): Unit =
       streamOpt.foreach(_.getTracks().foreach(_.stop()))
 
-    /** Starts (or restarts) the camera feed. Passing a `deviceId` pins it to a specific video input device;
-      * `None` lets the browser pick whichever one it considers the default.
+    /** Starts (or restarts) the camera feed. Passing a `deviceId` pins it to a specific video input device; `None` lets
+      * the browser pick whichever one it considers the default.
       */
     def startCamera(deviceId: Option[String]): Future[MediaStream] =
       dom.window.navigator.mediaDevices
         .getUserMedia(new MediaStreamConstraints {
-          video = deviceId.fold[Boolean | MediaTrackConstraints](true)(id =>
-            new MediaTrackConstraints { this.deviceId = id }
-          )
+          video =
+            deviceId.fold[Boolean | MediaTrackConstraints](true)(id => new MediaTrackConstraints { this.deviceId = id })
           audio = false
         })
         .toFuture
 
-    /** Best-effort lookup of the device id backing a stream's active video track, so the camera picked by
-      * the browser on first load can be located in the device list.
+    /** Best-effort lookup of the device id backing a stream's active video track, so the camera picked by the browser
+      * on first load can be located in the device list.
       */
     def currentDeviceIdOf(stream: MediaStream): Option[String] =
       stream.getVideoTracks().headOption.flatMap { track =>
@@ -184,13 +183,13 @@ object PhoneApp {
           given Owner = el.owner
           startCamera(None).onComplete {
             case Failure(exception) => throw exception
-            case Success(stream) =>
+            case Success(stream)    =>
               videoStreamVar.set(Some(stream))
               val activeDeviceId = currentDeviceIdOf(stream)
 
               dom.window.navigator.mediaDevices.enumerateDevices().toFuture.onComplete {
                 case Failure(exception) => throw exception
-                case Success(devices) =>
+                case Success(devices)   =>
                   val cameras = devices.filter(_.kind == MediaDeviceKind.videoinput).toIndexedSeq
                   camerasVar.set(cameras)
                   cameraIndexVar.set(
@@ -237,7 +236,23 @@ object PhoneApp {
             )
           )
         )
-      )
+      ),
+
+      onMountCallback { _ =>
+        dom.window.navigator
+          .asInstanceOf[js.Dynamic]
+          .selectDynamic("wakeLock")
+          .applyDynamic("request")("screen")
+          .asInstanceOf[js.Promise[js.Any]]
+          .toFuture
+          .onComplete {
+            case Failure(exception) =>
+              exception.printStackTrace()
+            case Success(value) =>
+              println("Acquired wake lock")
+              dom.console.log(value)
+          }
+      }
     )
   }
 
