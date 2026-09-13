@@ -12,6 +12,7 @@ import services.{ImagesService, MoviesService}
 import utils.websocket.JsonWebSocket
 import urldsl.language.dummyErrorImpl.*
 import org.scalajs.dom
+import org.scalajs.dom.Audio
 
 import scala.concurrent.ExecutionContext
 import scala.scalajs.js
@@ -27,6 +28,16 @@ object ComputerApp {
       ComputerMessage.ComputerToServerMessage,
       Movie.Id
     ](root / "movie-editor-connection" / segment[Movie.Id], movieId)
+
+    val playPictureSoundObserver = {
+      val pictureSoundAudio = Audio("/" ++ (base / "sounds" / "take-picture.wav").createPath())
+      pictureSoundAudio.preload = "auto"
+
+      Observer[Unit] { _ =>
+        pictureSoundAudio.currentTime = 0.0
+        pictureSoundAudio.play()
+      }
+    }
 
     val (updateSubscription, updatesCancellation) = movieService.subscribe(movieId)
 
@@ -157,7 +168,7 @@ object ComputerApp {
       askPictureEvents.map(_.requestId) --> inFlightPictureRequests.updater[Long](_ + _),
       websocket.inEvents.collect { case ComputerMessage.PhoneTookPicture(requestId) =>
         requestId
-      } --> inFlightPictureRequests.updater[Long](_ - _),
+      } --> Observer.combine(inFlightPictureRequests.updater[Long](_ - _), playPictureSoundObserver.contramap(_ => ())),
       inFlightPictureRequests.signal.changes
         .filter(_.nonEmpty)
         .flatMapSwitch(_ => EventStream.fromFuture(utils.sleep(3000)))
@@ -229,24 +240,24 @@ object ComputerApp {
       movieUpdatePairsSignal.changes
         .filter { case (previous, _) => previous.id != Movie.Id.dummy }
         --> Observer[(Movie, Movie)] { case (previous, next) =>
-        if !undoStack.consumeLocalChange() then {
-          val oldImages = previous.sortedImages
-          val newImages = next.sortedImages
-          if newImages.length > oldImages.length && newImages.take(oldImages.length) == oldImages then
-            newImages.drop(oldImages.length).zipWithIndex.foreach { case (image, offset) =>
-              val atIndex = oldImages.length + offset
-              undoStack.push(
-                UndoAction(
-                  "l'ajout d'une photo",
-                  () =>
-                    movieService
-                      .sendCommand(movieId, Movie.Command.RemoveImages(Vector(image.id -> atIndex), _))
-                      .map(_.contains(true))
+          if !undoStack.consumeLocalChange() then {
+            val oldImages = previous.sortedImages
+            val newImages = next.sortedImages
+            if newImages.length > oldImages.length && newImages.take(oldImages.length) == oldImages then
+              newImages.drop(oldImages.length).zipWithIndex.foreach { case (image, offset) =>
+                val atIndex = oldImages.length + offset
+                undoStack.push(
+                  UndoAction(
+                    "l'ajout d'une photo",
+                    () =>
+                      movieService
+                        .sendCommand(movieId, Movie.Command.RemoveImages(Vector(image.id -> atIndex), _))
+                        .map(_.contains(true))
+                  )
                 )
-              )
-            }
-        }
-      },
+              }
+          }
+        },
 
       // Ctrl+Z (or Cmd+Z on macOS) triggers the same undo as the button, unless the user is typing somewhere --
       // renaming the movie or typing in the delete-confirmation input -- in which case the browser's own
