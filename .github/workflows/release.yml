@@ -42,6 +42,7 @@ jobs:
           - os: macos-latest
             artifact-name: macos
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 

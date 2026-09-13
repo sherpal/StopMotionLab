@@ -92,6 +92,7 @@ lazy val server = project
       "org.bouncycastle" % "bcpkix-jdk18on" % "1.86" // mints the local self-signed TLS certificate authority/leaf certs
     ) ++ databaseStuff,
     fork := true,
+    Test / fork := false,
 
     assembly / assemblyMergeStrategy := {
       case "module-info.class" =>
