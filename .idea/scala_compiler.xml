@@ -15,12 +15,7 @@
         <parameter value="-Werror" />
       </parameters>
     </profile>
-    <profile name="sbt 4" modules="stopmotionlab-root.StopMotionLabFrontend.main,stopmotionlab-root.StopMotionLabFrontend.test">
-      <parameters>
-        <parameter value="-scalajs" />
-      </parameters>
-    </profile>
-    <profile name="sbt 5" modules="stopmotionlab-root.StopMotionLabFrontend~1.main,stopmotionlab-root.StopMotionLabFrontend~1.test,stopmotionlab-root.common.commonJS.main,stopmotionlab-root.common.commonJS.test">
+    <profile name="sbt 5" modules="stopmotionlab-root.StopMotionLabFrontend.main,stopmotionlab-root.StopMotionLabFrontend.test,stopmotionlab-root.StopMotionLabFrontend~1.main,stopmotionlab-root.StopMotionLabFrontend~1.test,stopmotionlab-root.common.commonJS.main,stopmotionlab-root.common.commonJS.test">
       <option name="implicitConversions" value="true" />
       <option name="higherKinds" value="true" />
       <option name="deprecationWarnings" value="true" />

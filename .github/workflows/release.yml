@@ -1,0 +1,92 @@
+name: Release native packages
+
+# Builds the native StopMotionLab app-image (jpackage: a bundled JRE + native launcher, no separate Java install
+# needed) on Linux, Windows and macOS, and publishes them as assets on a GitHub Release for the pushed tag.
+#
+# Only runs for tags named "release-*", and only when that tag actually points at a commit that is on master --
+# cut releases from master, e.g.:
+#   git tag release-1.0.0
+#   git push origin release-1.0.0
+
+on:
+  push:
+    tags:
+      - 'release-*'
+
+jobs:
+  verify-tag-on-master:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check that this tag points at a commit on master
+        run: |
+          git fetch origin master
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "::error::Tag $GITHUB_REF_NAME (commit $GITHUB_SHA) is not on master; refusing to release."
+            exit 1
+          fi
+
+  package:
+    needs: verify-tag-on-master
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact-name: linux
+          - os: windows-latest
+            artifact-name: windows
+          - os: macos-latest
+            artifact-name: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '16'
+
+      - name: Run tests
+        run: sbt test
+
+      - name: Build the native app-image (jpackage)
+        run: sbt packageNativeApp
+
+      # jpackage lays the app image out differently per OS (a plain folder on Linux/Windows, a .app bundle on
+      # macOS); tar -c over the whole dist-native/ directory sidesteps having to special-case that.
+      - name: Archive the app-image
+        shell: bash
+        run: tar -czf StopMotionLab-${{ matrix.artifact-name }}.tar.gz -C dist-native .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StopMotionLab-${{ matrix.artifact-name }}
+          path: StopMotionLab-${{ matrix.artifact-name }}.tar.gz
+
+  release:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish the GitHub release with the native packages attached
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.tar.gz

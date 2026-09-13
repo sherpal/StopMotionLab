@@ -7,13 +7,13 @@
         <option name="externalProjectPath" value="$PROJECT_DIR$" />
         <option name="modules">
           <set>
-            <option value="C:\Users\antoi\Documents\StopMotionLab" />
-            <option value="C:\Users\antoi\Documents\StopMotionLab\.sbt\matrix\common" />
-            <option value="C:\Users\antoi\Documents\StopMotionLab\.sbt\matrix\commonJS" />
-            <option value="C:\Users\antoi\Documents\StopMotionLab\common" />
-            <option value="C:\Users\antoi\Documents\StopMotionLab\frontend" />
-            <option value="C:\Users\antoi\Documents\StopMotionLab\project" />
-            <option value="C:\Users\antoi\Documents\StopMotionLab\server" />
+            <option value="$PROJECT_DIR$" />
+            <option value="$PROJECT_DIR$/.sbt/matrix/common" />
+            <option value="$PROJECT_DIR$/.sbt/matrix/commonJS" />
+            <option value="$PROJECT_DIR$/common" />
+            <option value="$PROJECT_DIR$/frontend" />
+            <option value="$PROJECT_DIR$/project" />
+            <option value="$PROJECT_DIR$/server" />
           </set>
         </option>
         <option name="sbtVersion" value="2.0.6" />

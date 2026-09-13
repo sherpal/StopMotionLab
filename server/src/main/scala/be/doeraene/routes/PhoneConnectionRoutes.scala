@@ -1,7 +1,7 @@
 package be.doeraene.routes
 
 import be.doeraene.qrcode.QrCode
-import be.doeraene.utils.NetworkUtils
+import be.doeraene.utils.{AppPaths, NetworkUtils}
 import data.app.AppConfig
 
 import java.nio.file.{Files, Path}
@@ -13,7 +13,7 @@ import java.nio.file.{Files, Path}
 class PhoneConnectionRoutes(config: AppConfig)(using cask.util.Logger) extends cask.Routes with Helpers {
 
   // Kept in sync with be.doeraene.entry.MakeSslContext, which writes the CA's public cert there.
-  private val caCertFile: Path = Path.of("./data/certs/ca.crt")
+  private val caCertFile: Path = AppPaths.dataDir(config.isProd).resolve("certs/ca.crt")
 
   // The scheme/port a phone should hit are overridable, since in dev the browser-facing origin is the Vite dev
   // server (fronting this backend), not this process's own bind port.

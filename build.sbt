@@ -243,3 +243,53 @@ Global / packageApplication := Def.uncached {
   IO.copyFile(fatJar, target)
   target
 }
+
+val packageNativeApp =
+  taskKey[File]("Wrap the fat jar into a native app-image (bundled JRE, double-click to run) via jpackage")
+
+Global / packageNativeApp := Def.uncached {
+  /*
+  Wraps the fat jar from `packageApplication` into a native app-image using the JDK's own `jpackage`
+  (JDK 16+): a folder with a native launcher plus a trimmed-down bundled JRE, so people can just double-click
+  to run the app without installing Java themselves, and it always launches with -DisProd=true (HTTPS +
+  auto-open browser, see StopMotionLabServer).
+
+  Note: jpackage only ever builds for the OS/architecture it runs on -- there is no cross-compiling. To hand
+  someone a Windows app-image you need to run this task on Windows (or a matching CI runner), and likewise
+  for macOS.
+   */
+  val fatJar = (Global / packageApplication).value
+
+  val appVersion = "1.0.0" // jpackage requires a plain X.Y.Z version; ThisBuild's "-SNAPSHOT" suffix isn't allowed
+
+  val outputDir = baseDirectory.value / "dist-native"
+  IO.delete(outputDir) // jpackage refuses to write into a non-empty --dest
+
+  val jpackageArgs = Seq(
+    "jpackage",
+    "--type",
+    "app-image",
+    "--input",
+    fatJar.getParentFile.getAbsolutePath,
+    "--main-jar",
+    fatJar.getName,
+    "--name",
+    "StopMotionLab",
+    "--app-version",
+    appVersion,
+    "--dest",
+    outputDir.getAbsolutePath,
+    "--java-options",
+    "-DisProd=true"
+  )
+
+  println(s"Running: ${jpackageArgs.mkString(" ")}")
+  val exit = Process(jpackageArgs).run().exitValue()
+  if (exit != 0) {
+    throw new IllegalStateException(
+      "jpackage failed. See above for reason. Make sure a JDK 16+ providing jpackage is on your PATH."
+    )
+  }
+
+  outputDir
+}
