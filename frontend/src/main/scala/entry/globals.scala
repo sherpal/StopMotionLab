@@ -14,18 +14,6 @@ import urldsl.language.dummyErrorImpl.*
 @main def run(): Unit = {
   import DefinedRoutes.*
 
-  def isMobile = {
-    val isCoarse = dom.window.matchMedia("(pointer: coarse)").matches
-    val isSmall  = dom.window.matchMedia("(max-width: 768px)").matches
-
-    isCoarse && isSmall
-  }
-
-  println(isMobile)
-
-  println(baseStr)
-  println(base.createPath())
-
   given castor.Context      = castor.Context.Simple.global
   given HttpClient          = HttpClient(None)
   given ImagesService       = ImagesService(None) // todo: the None will depend on where we are...

@@ -1,13 +1,14 @@
 package movieeditor
 
 import be.doeraene.webcomponents.ui5.configkeys.{ButtonDesign, IconName, MessageStripDesign}
-import be.doeraene.webcomponents.ui5.{Button, BusyIndicator, Card, Icon, MessageStrip, Text}
+import be.doeraene.webcomponents.ui5.{Bar, BusyIndicator, Button, Card, Dialog, Icon, MessageStrip, Text}
 import com.raquo.laminar.api.L.*
 import data.movie.Movie
 import org.scalajs.dom
 import org.scalajs.dom.BlobPropertyBag
 import services.ImagesService
 
+import java.io.{PrintWriter, StringWriter}
 import scala.concurrent.{ExecutionContext, Future}
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters.JSRichIterableOnce
@@ -28,6 +29,9 @@ object CaptureActionsCard {
       imagesPerSecondSignal: Signal[Int]
   )(using imagesService: ImagesService)(using ExecutionContext): HtmlElement = {
     val createMovieBus = new EventBus[Unit]
+
+    val errorInMovieCreationBus = new EventBus[Throwable]
+    val closeErrorDialogBus     = new EventBus[Unit]
 
     Card.of(
       _ => display.block,
@@ -70,7 +74,7 @@ object CaptureActionsCard {
               _.events.onClick.preventDefault.mapToUnit --> createMovieBus.writer,
               _ =>
                 createMovieBus.events.sample(imagesPerSecondSignal) --> Observer[Int](
-                  downloadAsVideo(movieVar, encodingVar, _)
+                  downloadAsVideo(movieVar, encodingVar, _, errorInMovieCreationBus.writer)
                 )
             ),
             child.maybe <-- encodingVar.signal.map(
@@ -101,11 +105,52 @@ object CaptureActionsCard {
                   .mapToUnit --> askPictureObserver
             )
           )
+        ),
+      _ =>
+        Dialog.of(
+          _.showFromEvents(errorInMovieCreationBus.events.mapToUnit),
+          _.closeFromEvents(closeErrorDialogBus.events),
+          _.headerText := "Erreur lors de la création du film",
+          _ =>
+            MessageStrip.of(
+              _.design := MessageStripDesign.Negative,
+              _ =>
+                div(
+                  p(
+                    "Il y a eu une erreur à la création du film: ",
+                    child.text <-- errorInMovieCreationBus.events.map(throwable =>
+                      Option(throwable.getMessage).getOrElse("Unknown error")
+                    )
+                  ),
+                  pre(
+                    width.percent := 100,
+                    overflowX.auto,
+                    child.text <-- errorInMovieCreationBus.events.map { throwable =>
+                      val sw = StringWriter()
+                      val pw = PrintWriter(sw)
+                      throwable.printStackTrace(pw)
+                      val sStackTrace = sw.toString
+                      sStackTrace
+                    }
+                  )
+                )
+            ),
+          _.slots.footer := Bar.of(
+            _.slots.endContent := Button.of(
+              _ => "Close",
+              _.events.onClick.mapToUnit --> closeErrorDialogBus.writer
+            )
+          )
         )
     )
   }
 
-  private def downloadAsVideo(movieVar: Var[Movie], encodingVar: Var[Boolean], imagesPerSecond: Int)(using
+  private def downloadAsVideo(
+      movieVar: Var[Movie],
+      encodingVar: Var[Boolean],
+      imagesPerSecond: Int,
+      errorInMovieCreationObserver: Observer[Throwable]
+  )(using
       imagesService: ImagesService
   )(using ExecutionContext): Unit = {
     encodingVar.set(true)
@@ -117,6 +162,7 @@ object CaptureActionsCard {
       .onComplete {
         case Failure(exception) =>
           encodingVar.set(false)
+          errorInMovieCreationObserver.onNext(exception)
           throw exception
         case Success(arrayBuff) =>
           encodingVar.set(false)
