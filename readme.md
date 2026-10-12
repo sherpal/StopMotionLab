@@ -37,7 +37,12 @@ easiest way to hand the app to someone else, or to put it on an old laptop.
 
 Caveats:
 - `jpackage` only ever builds for the OS/architecture it runs on -- there's no cross-compiling. See
-  `.github/workflows/release.yml` for a CI matrix that builds all three from a single tag push.
+  `.github/workflows/release.yml` for a CI matrix that builds every flavour from a single tag push: Linux,
+  Windows, and two macOS ones (`macos-apple-silicon` for M1 and later, `macos-intel` for older Macs). Using the
+  wrong macOS one gives "this app is not supported on this Mac" -- check  → About This Mac: "Chip" means Apple
+  Silicon, "Processor" means Intel.
+- The app isn't code-signed, so macOS Gatekeeper may refuse to open it ("damaged" / "unidentified developer").
+  Right-click the app → Open the first time, or run `xattr -dr com.apple.quarantine StopMotionLab.app`.
 - This produces a portable *app-image* (a plain folder you can copy around, e.g. onto a USB stick), not an
   installer (`.msi`/`.deb`/`.dmg`). Installer types would put the app under a system location a regular user
   can't write to, which conflicts with keeping its data folder next to itself -- stick to app-image unless
@@ -47,7 +52,7 @@ Caveats:
 
 Pushing a tag named `release-*` that points at a commit on `master` triggers
 [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds the native app-image on Linux,
-Windows and macOS runners and publishes them as assets on a GitHub Release for that tag:
+Windows and macOS (Apple Silicon + Intel) runners and publishes them as assets on a GitHub Release for that tag:
 
 ```
 git tag release-1.0.0

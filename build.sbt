@@ -92,6 +92,11 @@ lazy val server = project
       "org.bouncycastle" % "bcpkix-jdk18on" % "1.86" // mints the local self-signed TLS certificate authority/leaf certs
     ) ++ databaseStuff,
     fork := true,
+    // `fork := true` above makes sbt spawn a separate JVM and block on `Process.waitFor` until it exits -- if a
+    // test leaves a non-daemon thread running (e.g. an executor/scheduler that isn't shut down), that forked JVM
+    // never exits and sbt hangs forever right after printing the test results, even though every test passed.
+    // Not forking the *test* JVM avoids that failure mode entirely, since then nothing but the test task itself
+    // gates sbt moving on.
     Test / fork := false,
 
     assembly / assemblyMergeStrategy := {

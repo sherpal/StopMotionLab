@@ -39,9 +39,16 @@ jobs:
             artifact-name: linux
           - os: windows-latest
             artifact-name: windows
+          # jpackage can't cross-compile, and the JDK that runs it determines the architecture of the result, so
+          # macOS needs one runner per CPU type: macos-latest is Apple Silicon (arm64), the other one is Intel.
           - os: macos-latest
-            artifact-name: macos
+            artifact-name: macos-apple-silicon
+          - os: macos-15-intel
+            artifact-name: macos-intel
     runs-on: ${{ matrix.os }}
+    # A full run of this job normally takes a few minutes; this is just a safety net so a hung sbt/JVM (e.g. a
+    # test that leaves a non-daemon thread running, which forked tests block on forever) fails fast and frees the
+    # runner instead of quietly eating hours of (especially macOS) runner time.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
