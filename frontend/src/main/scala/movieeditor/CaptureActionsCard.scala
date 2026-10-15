@@ -1,21 +1,29 @@
 package movieeditor
 
 import be.doeraene.webcomponents.ui5.configkeys.{ButtonDesign, IconName, MessageStripDesign}
-import be.doeraene.webcomponents.ui5.{Bar, BusyIndicator, Button, Card, Dialog, Icon, MessageStrip, Text}
+import be.doeraene.webcomponents.ui5.{
+  Bar,
+  BusyIndicator,
+  Button,
+  Card,
+  Dialog,
+  Icon,
+  MessageStrip,
+  ProgressIndicator,
+  Text
+}
 import com.raquo.laminar.api.L.*
 import data.movie.Movie
+import data.video.VideoEncodingJob
 import org.scalajs.dom
-import org.scalajs.dom.BlobPropertyBag
-import services.ImagesService
+import services.MoviesService
 
 import java.io.{PrintWriter, StringWriter}
-import scala.concurrent.{ExecutionContext, Future}
-import scala.scalajs.js
-import scala.scalajs.js.JSConverters.JSRichIterableOnce
+import scala.concurrent.ExecutionContext
 import scala.util.{Failure, Success}
 
 /** The "Prise de vue" card: lets the user ask for a single picture, toggle a one-picture-per-second burst, and export
-  * the current frames as a downloadable webm video.
+  * the current frames as a downloadable mp4 video (encoded by the server).
   */
 object CaptureActionsCard {
 
@@ -27,11 +35,14 @@ object CaptureActionsCard {
       inFlightPictureRequestsSignal: Signal[Set[Long]],
       askPictureObserver: Observer[Unit],
       imagesPerSecondSignal: Signal[Int]
-  )(using imagesService: ImagesService)(using ExecutionContext): HtmlElement = {
+  )(using moviesService: MoviesService)(using ExecutionContext): HtmlElement = {
     val createMovieBus = new EventBus[Unit]
 
     val errorInMovieCreationBus = new EventBus[Throwable]
     val closeErrorDialogBus     = new EventBus[Unit]
+
+    // last known status of the encoding job, None until the server has answered
+    val encodingStatusVar = Var(Option.empty[VideoEncodingJob.Status])
 
     Card.of(
       _ => display.block,
@@ -74,20 +85,10 @@ object CaptureActionsCard {
               _.events.onClick.preventDefault.mapToUnit --> createMovieBus.writer,
               _ =>
                 createMovieBus.events.sample(imagesPerSecondSignal) --> Observer[Int](
-                  downloadAsVideo(movieVar, encodingVar, _, errorInMovieCreationBus.writer)
+                  downloadAsVideo(movieVar, encodingVar, encodingStatusVar, _, errorInMovieCreationBus.writer)
                 )
             ),
-            child.maybe <-- encodingVar.signal.map(
-              Option.when(_)(
-                div(
-                  display.flex,
-                  alignItems.center,
-                  gap.px := 8,
-                  BusyIndicator.of(_.active := true),
-                  Text("Encodage de la vidéo…")
-                )
-              )
-            ),
+            child.maybe <-- encodingVar.signal.map(Option.when(_)(encodingProgress(encodingStatusVar.signal))),
             Button.of(
               _ =>
                 child <-- burstActive.signal.map(if _ then
@@ -145,45 +146,66 @@ object CaptureActionsCard {
     )
   }
 
+  private def encodingProgress(statusSignal: Signal[Option[VideoEncodingJob.Status]]): HtmlElement = {
+    val runningSignal = statusSignal.map {
+      case Some(VideoEncodingJob.Status.Running(encodedFrames, totalFrames)) => Some((encodedFrames, totalFrames))
+      case _                                                                 => None
+    }
+
+    div(
+      child <-- runningSignal.map(_.isDefined).distinct.map {
+        case true =>
+          // only (re-)created when encoding starts, so that it smoothly moves forward afterwards
+          val progressSignal = runningSignal.map(_.getOrElse((0, 1)))
+          ProgressIndicator.of(
+            _ => width.px := 280,
+            _.value <-- progressSignal.map((encoded, total) => encoded * 100 / total),
+            _.displayValue <-- progressSignal.map((encoded, total) => s"Encodage : $encoded / $total images")
+          )
+        case false =>
+          div(
+            display.flex,
+            alignItems.center,
+            gap.px := 8,
+            BusyIndicator.of(_.active := true),
+            Text(child.text <-- statusSignal.map {
+              case Some(VideoEncodingJob.Status.Queued(position)) =>
+                s"En attente d'un autre film (position $position)…"
+              case _ => "Préparation de l'encodage…"
+            })
+          )
+      }
+    )
+  }
+
   private def downloadAsVideo(
       movieVar: Var[Movie],
       encodingVar: Var[Boolean],
+      encodingStatusVar: Var[Option[VideoEncodingJob.Status]],
       imagesPerSecond: Int,
       errorInMovieCreationObserver: Observer[Throwable]
   )(using
-      imagesService: ImagesService
+      moviesService: MoviesService
   )(using ExecutionContext): Unit = {
+    encodingStatusVar.set(None)
     encodingVar.set(true)
-    val images = movieVar.now().sortedImages
-    Future
-      .sequence(images.map(image => imagesService.getImageUrlEncoded(image.id)))
-      .map(_.toJSArray)
-      .flatMap(utils.videoencoding.encodeToVideo(_, imagesPerSecond))
-      .onComplete {
-        case Failure(exception) =>
-          encodingVar.set(false)
-          errorInMovieCreationObserver.onNext(exception)
-          throw exception
-        case Success(arrayBuff) =>
-          encodingVar.set(false)
-          val blob = dom.Blob(
-            js.Array(arrayBuff),
-            new BlobPropertyBag {
-              `type` = "video/webm"
-            }
-          )
-          val url = dom.URL.createObjectURL(blob)
-
-          val link = dom.document
-            .createElement("a")
-            .asInstanceOf[dom.html.Anchor]
-
-          link.href = url
-          link.download = "stop-motion.webm"
-          link.click()
-
-          dom.URL.revokeObjectURL(url)
-      }
+    (for {
+      jobId <- moviesService.startVideoEncoding(movieVar.now().id, imagesPerSecond)
+      _     <- moviesService.waitForVideo(jobId, status => encodingStatusVar.set(Some(status)))
+    } yield jobId).onComplete {
+      case Failure(exception) =>
+        encodingVar.set(false)
+        errorInMovieCreationObserver.onNext(exception)
+        throw exception
+      case Success(jobId) =>
+        encodingVar.set(false)
+        // A plain link to the server's file: the browser streams it to disk, without holding it in memory. The file's
+        // name comes from the response's Content-Disposition header; `download` makes sure we never navigate away.
+        val link = dom.document.createElement("a").asInstanceOf[dom.html.Anchor]
+        link.href = moviesService.videoUrl(jobId)
+        link.setAttribute("download", "")
+        link.click()
+    }
   }
 
 }

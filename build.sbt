@@ -80,6 +80,55 @@ def databaseStuff = Seq(
   "org.xerial"   % "sqlite-jdbc"               % "3.53.4.0"
 )
 
+val javacvVersion = "1.5.14"
+val ffmpegVersion = s"8.1.2-$javacvVersion"
+
+/** The JavaCPP platform (OS + CPU) whose native FFmpeg binaries get bundled into the server.
+  *
+  * Each platform's natives weigh 20-30 MB, so rather than shipping all of them in every package, we only take the
+  * ones for the machine running the build: jpackage can't cross-compile anyway (see `packageNativeApp`), so the
+  * package built on a given OS only ever runs on that OS. Can be forced with `-Djavacpp.platform=...`.
+  */
+val javacppPlatform: String = sys.props.getOrElse(
+  "javacpp.platform", {
+    val osName = sys.props("os.name").toLowerCase
+    val arch   = sys.props("os.arch") match {
+      case "amd64" | "x86_64"  => "x86_64"
+      case "aarch64" | "arm64" => "arm64"
+      case other               => other
+    }
+    val os =
+      if osName.contains("win") then "windows"
+      else if osName.contains("mac") then "macosx"
+      else "linux"
+    s"$os-$arch"
+  }
+)
+
+/** FFmpeg (through JavaCV) to encode movies into videos, with room for audio tracks (e.g. sound effects) later on. */
+def videoEncodingStuff = Seq(
+  // JavaCV drags in every library it has bindings for (OpenCV, Tesseract, camera drivers...); we only need FFmpeg.
+  ("org.bytedeco" % "javacv" % javacvVersion).excludeAll(
+    Seq(
+      "openblas",
+      "opencv",
+      "flycapture",
+      "libdc1394",
+      "libfreenect",
+      "libfreenect2",
+      "librealsense",
+      "librealsense2",
+      "videoinput",
+      "artoolkitplus",
+      "flandmark",
+      "leptonica",
+      "tesseract"
+    ).map(ExclusionRule("org.bytedeco", _))*
+  ),
+  ("org.bytedeco" % "javacpp" % javacvVersion).classifier(javacppPlatform),
+  ("org.bytedeco" % "ffmpeg"  % ffmpegVersion).classifier(javacppPlatform)
+)
+
 lazy val server = project
   .in(file("./server"))
   .settings(
@@ -90,7 +139,7 @@ lazy val server = project
       "com.lihaoyi"     %% "os-lib"         % "0.11.8",
       "com.google.zxing" % "core"           % "3.5.4",
       "org.bouncycastle" % "bcpkix-jdk18on" % "1.86" // mints the local self-signed TLS certificate authority/leaf certs
-    ) ++ databaseStuff,
+    ) ++ databaseStuff ++ videoEncodingStuff,
     fork := true,
     // `fork := true` above makes sbt spawn a separate JVM and block on `Process.waitFor` until it exits -- if a
     // test leaves a non-daemon thread running (e.g. an executor/scheduler that isn't shut down), that forked JVM

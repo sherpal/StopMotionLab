@@ -6,6 +6,7 @@ import be.doeraene.routes.{
   MoviesRoutes,
   PhoneConnectionRoutes,
   StaticResourcesWithContentType,
+  VideoEncodingRoutes,
   VideoFluxRoutes
 }
 import be.doeraene.services.connectedclients.ConnectedClientsService
@@ -13,6 +14,7 @@ import be.doeraene.services.database.DatabaseService
 import be.doeraene.services.filestorage.FileStorageService
 import be.doeraene.services.images.ImagesService
 import be.doeraene.services.movies.MoviesService
+import be.doeraene.services.videoencoding.{VideoEncodingJobsService, VideoEncodingService}
 import be.doeraene.utils.{AppPaths, NetworkUtils}
 import cask.main.{Main, Routes}
 import data.app.AppConfig
@@ -43,16 +45,19 @@ object StopMotionLabServer extends cask.MainRoutes {
       eventsourcing.SqlEventStore(summon[DatabaseService].client),
       eventsourcing.CastorScheduler()
     )
-  given FileStorageService      = FileStorageService(dataDir.resolve("storage"))
-  given ImagesService           = ImagesService()
-  given MoviesService           = MoviesService()
-  given ConnectedClientsService = ConnectedClientsService()
+  given FileStorageService       = FileStorageService(dataDir.resolve("storage"))
+  given ImagesService            = ImagesService()
+  given MoviesService            = MoviesService()
+  given ConnectedClientsService  = ConnectedClientsService()
+  given VideoEncodingService     = VideoEncodingService()
+  given VideoEncodingJobsService = VideoEncodingJobsService(os.Path(dataDir.resolve("videos").toAbsolutePath))
 
   private def otherRoutes: Seq[cask.Routes] =
     Seq(
       VideoFluxRoutes(),
       ImagesRoutes(),
       MoviesRoutes(),
+      VideoEncodingRoutes(),
       PhoneConnectionRoutes(appConfig),
       CommandRoutes(Seq(summon[MoviesService].commandRouter))
     )

@@ -3,12 +3,15 @@ package services
 import be.doeraene.utils.castorutils.BottleNeckActor
 import com.raquo.laminar.api.L.*
 import data.movie.{DeletedMovieMetadata, Movie, MovieMetadata}
+import data.video.VideoEncodingJob
 import io.circe.Codec
 import urldsl.language.dummyErrorImpl.*
 import utils.websocket.CommandBridgeClient
 
 import scala.collection.mutable
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.scalajs.js
 
 class MoviesService(using
     httpClient: HttpClient,
@@ -35,6 +38,37 @@ class MoviesService(using
     httpClient.get[Vector[DeletedMovieMetadata]](moviesPath / "deleted")
 
   def create(): Future[Movie.Id] = httpClient.post[Movie.Id](moviesPath / "create", ignore)(())
+
+  private val videoJobPath = root / "video-jobs" / segment[VideoEncodingJob.Id]
+
+  /** Asks the server to encode the movie into an mp4 video, in the background (see [[VideoEncodingJob]]). */
+  def startVideoEncoding(id: Movie.Id, imagesPerSecond: Int): Future[VideoEncodingJob.Id] =
+    httpClient.post[VideoEncodingJob.Id](
+      moviesPath / segment[Movie.Id] / "video-jobs",
+      param[Int]("imagesPerSecond")
+    )(id, imagesPerSecond)
+
+  def videoEncodingStatus(jobId: VideoEncodingJob.Id): Future[VideoEncodingJob.Status] =
+    httpClient.get[VideoEncodingJob.Status](videoJobPath, ignore)(jobId, ())
+
+  /** Polls the job's status until it's done (or failed, in which case the future fails with the reason). */
+  def waitForVideo(
+      jobId: VideoEncodingJob.Id,
+      onProgress: VideoEncodingJob.Status => Unit,
+      pollingInterval: FiniteDuration = 1.second
+  ): Future[Unit] =
+    videoEncodingStatus(jobId).flatMap {
+      case VideoEncodingJob.Status.Done            => Future.unit
+      case VideoEncodingJob.Status.Failed(message) => Future.failed(RuntimeException(message))
+      case status                                  =>
+        onProgress(status)
+        val delay = Promise[Unit]()
+        js.timers.setTimeout(pollingInterval)(delay.success(()))
+        delay.future.flatMap(_ => waitForVideo(jobId, onProgress, pollingInterval))
+    }
+
+  /** Where to download the video, once its job is done. */
+  def videoUrl(jobId: VideoEncodingJob.Id): String = httpClient.url(videoJobPath / "video")(jobId)
 
   def movieF(id: Movie.Id): Future[Option[Movie]] =
     movieEntity(id).forcePass(Movie.Command.Get.apply)

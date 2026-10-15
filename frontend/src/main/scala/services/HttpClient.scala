@@ -112,6 +112,12 @@ class HttpClient(maybeApiHost: Option[String])(using ExecutionContext) {
   private def send[R](using ExecutionContext) =
     new RequestForResponse[R]
 
+  /** The full url of the given api path, e.g. to give to the browser as a link to download a file. */
+  def url[T](path: HttpClient.Path[T])(t: T): String =
+    maybeApiHost.fold(dom.document.location.origin)(_.stripSuffix("/")) ++
+      s"/$apiPrefix/" ++
+      path.createPath(t)
+
   def getStatus(path: HttpClient.Path[Unit])(using ExecutionContext): Future[Int] =
     send[Unit](HttpMethod.GET, path, None, None, _ => Right(())).map(_._2)
 
@@ -176,6 +182,19 @@ class HttpClient(maybeApiHost: Option[String])(using ExecutionContext) {
 
   def post[R](using ExecutionContext): POSTResponseFilled[R] =
     new POSTResponseFilled[R] {
+
+      def apply[T, Q](
+          path: HttpClient.Path[T],
+          query: HttpClient.Query[Q]
+      )(t: T, q: Q)(using decoder: Decoder[R]): Future[R] =
+        send[R](
+          HttpMethod.POST,
+          path,
+          Some((query, q)),
+          None,
+          t,
+          decoderToBodyReader(decoder)
+        ).map(_._1)
 
       def apply[Q](
           path: HttpClient.Path[Unit],
@@ -288,6 +307,13 @@ class HttpClient(maybeApiHost: Option[String])(using ExecutionContext) {
   }
 
   trait POSTResponseFilled[R] {
+
+    /** Makes a POST http call to the given [[Path]] with the given [[Query]] parameters, without body. Interpret the
+      * response as an element of type `R`.
+      */
+    def apply[T, Q](path: HttpClient.Path[T], query: HttpClient.Query[Q])(t: T, q: Q)(using
+        decoder: Decoder[R]
+    ): Future[R]
 
     /** Makes a POST http call to the given [[Path]] with the given [[Query]] parameters, without body. Interpret the
       * response as an element of type `R`.
