@@ -172,7 +172,7 @@ lazy val frontend = project
     name := "StopMotionLabFrontend",
     libraryDependencies ++= Seq(
       "com.raquo"   %% "laminar"            % "17.2.1",
-      "be.doeraene" %% "web-components-ui5" % "2.12.2"
+      "be.doeraene" %% "web-components-ui5" % "2.27.0"
     ),
     scalaJSUseMainModuleInitializer := true,
 
