@@ -18,10 +18,18 @@ java -DisProd=true -jar dist/app.jar
   this is how you stop it. If no tray is available (some Linux setups without a notification area), it falls
   back to printing a message: close the process from your OS's task/process manager instead (Task Manager on
   Windows, Activity Monitor on macOS, `xkill`/`kill` on Linux);
-- stores its data (`db/`, `storage/`, `certs/`) next to wherever the running jar/app physically lives
-  (`AppPaths.dataDir`), rather than relative to whatever directory it happened to be launched from -- important
-  since double-clicking a packaged app doesn't reliably set the working directory the way running from a
-  terminal does.
+- stores its data (`db/`, `storage/`, `videos/`, `certs/`) in the OS's per-user application data directory
+  (`AppPaths.dataDir`), so it survives installing a newer release and deleting the old app:
+  - macOS: `~/Library/Application Support/StopMotionLab`
+  - Windows: `%APPDATA%\StopMotionLab`
+  - Linux: `~/.local/share/StopMotionLab` (or `$XDG_DATA_HOME/StopMotionLab`)
+
+  Override with `-DdataDir=<path>` if you want it somewhere else. To back up or move your movies to another
+  machine, copy that whole folder (with the app closed).
+
+  Releases up to `release-0.2` stored the data inside the app itself instead (`<app>/lib/app/data` on Linux,
+  `<app>\app\data` on Windows, `StopMotionLab.app/Contents/app/data` on macOS): copy that `data` folder to the
+  new location once, with both apps closed, and the new version picks it up.
 
 In dev (no `-DisProd`), none of the above applies: the server speaks plain HTTP, doesn't auto-open a browser
 (Vite's dev server is the actual page you load), and data lives under `./data` relative to wherever sbt/the IDE

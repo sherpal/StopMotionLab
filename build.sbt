@@ -158,6 +158,11 @@ lazy val server = project
       case PathList("META-INF", "versions", _, "OSGI-INF", "MANIFEST.MF") =>
         MergeStrategy.discard
 
+      // GraalVM native-image metadata shipped by javacpp/ffmpeg (they clash on jnijavacpp/reflect-config.json);
+      // only used when compiling to a native image, never on a regular JVM.
+      case PathList("META-INF", "native-image", _*) =>
+        MergeStrategy.discard
+
       case x =>
         MergeStrategy.defaultMergeStrategy(x)
     }
